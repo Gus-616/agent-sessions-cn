@@ -1,0 +1,33 @@
+import Dispatch
+import Foundation
+
+/// Coalesces high-frequency progress updates into a lower-frequency "flush" signal.
+final class ProgressThrottler {
+    private let lock = NSLock()
+    private var lastFlush = DispatchTime.now()
+    private var pendingTicks = 0
+    private let intervalNanoseconds: UInt64
+    private let flushEveryTicks: Int
+
+    init(intervalMs: Int = 900, flushEveryTicks: Int = 500) {
+        intervalNanoseconds = UInt64(intervalMs) * 1_000_000
+        self.flushEveryTicks = flushEveryTicks
+    }
+
+    func incrementAndShouldFlush() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingTicks += 1
+        let now = DispatchTime.now()
+        if now.uptimeNanoseconds - lastFlush.uptimeNanoseconds > intervalNanoseconds {
+            lastFlush = now
+            pendingTicks = 0
+            return true
+        }
+        if pendingTicks >= flushEveryTicks {
+            pendingTicks = 0
+            return true
+        }
+        return false
+    }
+}

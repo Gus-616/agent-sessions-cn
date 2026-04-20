@@ -1,0 +1,3371 @@
+import SwiftUI
+import AppKit
+import Foundation
+import UniformTypeIdentifiers
+
+private enum TranscriptToolbarStyle {
+    static let baseFont = Font.system(size: 13, weight: .regular, design: .monospaced)
+    static let compactFont = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let popoverFont = Font.system(size: 12, weight: .medium, design: .monospaced)
+    static let leadingPadding: CGFloat = 8
+}
+
+struct TranscriptRenderGenerationGate {
+    private(set) var generation: Int = 0
+
+    mutating func begin() -> Int {
+        generation &+= 1
+        return generation
+    }
+
+    func allowsApply(candidateGeneration: Int, activeSessionID: String?, expectedSessionID: String) -> Bool {
+        candidateGeneration == generation && activeSessionID == expectedSessionID
+    }
+}
+
+enum TranscriptSessionRenderKey {
+    static func build(for session: Session) -> String {
+        "\(session.id)|\(session.eventCount)|\(session.events.count)|\(session.fileSizeBytes ?? -1)|\(session.endTime?.timeIntervalSince1970 ?? 0)|\(session.isFavorite ? 1 : 0)"
+    }
+}
+
+struct TranscriptTailUpdateState: Equatable {
+    enum BottomProximity: Equatable {
+        case unknown
+        case nearBottom
+        case awayFromBottom
+    }
+
+    private(set) var sessionID: String? = nil
+    private(set) var lastContentVersion: Int = 0
+    private(set) var bottomProximity: BottomProximity = .unknown
+    private(set) var hasUnseenUpdates: Bool = false
+    private(set) var stickyFollowEnabled: Bool = true
+    private(set) var scrollToBottomToken: Int = 0
+
+    var shouldShowJumpToLatestButton: Bool {
+        bottomProximity != .nearBottom
+    }
+
+    var isNearBottom: Bool {
+        bottomProximity == .nearBottom
+    }
+
+    mutating func reset(sessionID: String, contentVersion: Int) {
+        self.sessionID = sessionID
+        self.lastContentVersion = contentVersion
+        self.bottomProximity = .unknown
+        self.hasUnseenUpdates = false
+        self.stickyFollowEnabled = true
+    }
+
+    mutating func viewportChanged(isNearBottom: Bool) {
+        self.bottomProximity = isNearBottom ? .nearBottom : .awayFromBottom
+        if isNearBottom {
+            hasUnseenUpdates = false
+            stickyFollowEnabled = true
+        } else {
+            stickyFollowEnabled = false
+        }
+    }
+
+    mutating func contentVersionChanged(sessionID: String, contentVersion: Int) {
+        guard self.sessionID == sessionID else {
+            reset(sessionID: sessionID, contentVersion: contentVersion)
+            return
+        }
+        guard contentVersion != lastContentVersion else { return }
+
+        lastContentVersion = contentVersion
+        if bottomProximity != .awayFromBottom || stickyFollowEnabled {
+            hasUnseenUpdates = false
+            scrollToBottomToken &+= 1
+        } else {
+            hasUnseenUpdates = true
+        }
+    }
+
+    mutating func jumpToLatest() {
+        bottomProximity = .nearBottom
+        hasUnseenUpdates = false
+        stickyFollowEnabled = true
+        scrollToBottomToken &+= 1
+    }
+}
+
+enum TranscriptSessionResolutionPolicy {
+    // Backward-compatible overload to avoid stale call sites during incremental test bundles.
+    static func preferredSession(live: Session?, cached: Session?, sessionID: String) -> Session? {
+        preferredSession(
+            live: live,
+            cached: cached,
+            sessionID: sessionID,
+            isLoadingSession: true,
+            loadingSessionID: sessionID
+        )
+    }
+
+    static func preferredSession(live: Session?,
+                                 cached: Session?,
+                                 sessionID: String,
+                                 isLoadingSession: Bool,
+                                 loadingSessionID: String?) -> Session? {
+        if let live {
+            let isTransientlyReloadingSameSession = isLoadingSession && loadingSessionID == sessionID
+            let hasNonTrivialSessionMetadata = (live.eventCount > 0) || ((live.fileSizeBytes ?? 0) > 0)
+            if live.events.isEmpty,
+               let cached,
+               cached.id == sessionID,
+               !cached.events.isEmpty,
+               (isTransientlyReloadingSameSession || hasNonTrivialSessionMetadata) {
+                return cached
+            }
+            return live
+        }
+        if let cached, cached.id == sessionID {
+            return cached
+        }
+        return nil
+    }
+}
+
+/// Codex transcript view - now a wrapper around UnifiedTranscriptView
+struct TranscriptPlainView: View {
+    @EnvironmentObject var indexer: SessionIndexer
+    let sessionID: String?
+
+    var body: some View {
+        UnifiedTranscriptView(
+            indexer: indexer,
+            sessionID: sessionID,
+            sessionIDExtractor: codexSessionID,
+            sessionIDLabel: "Codex",
+            enableCaching: true
+        )
+    }
+
+    private func codexSessionID(for session: Session) -> String? {
+        // Extract full Codex session ID (base64 or UUID from filepath)
+        let base = URL(fileURLWithPath: session.filePath).deletingPathExtension().lastPathComponent
+        if base.count >= 8 { return base }
+        return nil
+    }
+}
+
+/// Unified transcript view that works with both Codex and Claude session indexers
+struct UnifiedTranscriptView<Indexer: SessionIndexerProtocol>: View {
+    @ObservedObject var indexer: Indexer
+    @EnvironmentObject var focusCoordinator: WindowFocusCoordinator
+    @EnvironmentObject var searchState: UnifiedSearchState
+    @EnvironmentObject var archiveManager: SessionArchiveManager
+    @Environment(\.colorScheme) private var colorScheme
+    let sessionID: String?
+    let sessionIDExtractor: (Session) -> String?  // Extract ID for clipboard
+    let sessionIDLabel: String  // "Codex" or "Claude"
+    let enableCaching: Bool  // Codex uses cache, Claude doesn't
+
+    // Text transcript buffer
+    @State private var transcript: String = ""
+    @State private var rebuildTask: Task<Void, Never>?
+    @State private var jsonBuildTask: Task<Void, Never>?
+    @State private var renderGate = TranscriptRenderGenerationGate()
+
+    // Unified Search (⌥⌘F): window-level query used to filter sessions and navigate within transcript
+    @State private var unifiedMatches: [NSRange] = []
+    @State private var unifiedCurrentMatchIndex: Int = 0
+    @State private var unifiedHighlightRanges: [NSRange] = []
+    @State private var pendingAutoJumpToken: Int? = nil
+    @State private var pendingAutoJumpSessionID: String? = nil
+    @State private var unifiedSearchJumpWorkItem: DispatchWorkItem? = nil
+    @State private var lastHandledAutoJumpToken: Int = 0
+
+    // Find (⌘F): local to the selected session (standard find bar)
+    @State private var isFindBarVisible: Bool = false
+    @State private var findQueryDraft: String = ""
+    @State private var findMatches: [Range<String.Index>] = []
+    @State private var findCurrentMatchIndex: Int = 0
+    @State private var findCurrentRange: NSRange? = nil
+    @FocusState private var isFindFieldFocused: Bool
+    @State private var commandRanges: [NSRange] = []
+    @State private var userRanges: [NSRange] = []
+    @State private var assistantRanges: [NSRange] = []
+    @State private var outputRanges: [NSRange] = []
+    @State private var errorRanges: [NSRange] = []
+    @State private var hasCommands: Bool = false
+    @State private var isBuildingJSON: Bool = false
+    // Terminal-specific unified search navigation state (used when viewMode == .terminal)
+    @State private var terminalUnifiedMatchesCount: Int = 0
+    @State private var terminalUnifiedTotalMatchesCount: Int = 0
+    @State private var terminalUnifiedCurrentIndex: Int = 0
+    @State private var terminalUnifiedFindToken: Int = 0
+    @State private var terminalUnifiedFindDirection: Int = 1
+    @State private var terminalUnifiedFindResetFlag: Bool = true
+    @State private var terminalUnifiedAllowMatchAutoScroll: Bool = true
+
+    // Terminal-specific local find state (used when viewMode == .terminal)
+    @State private var terminalFindMatchesCount: Int = 0
+    @State private var terminalFindTotalMatchesCount: Int = 0
+    @State private var terminalFindCurrentIndex: Int = 0
+    @State private var terminalFindToken: Int = 0
+    @State private var terminalFindDirection: Int = 1
+    @State private var terminalFindResetFlag: Bool = true
+    @State private var terminalAllowMatchAutoScroll: Bool = true
+
+    // Toggles (view-scoped)
+    @State private var showTimestamps: Bool = false
+    @AppStorage("TranscriptFontSize") private var transcriptFontSize: Double = 13
+    @AppStorage("TranscriptRenderMode") private var renderModeRaw: String = TranscriptRenderMode.terminal.rawValue
+    @AppStorage("SessionViewMode") private var viewModeRaw: String = SessionViewMode.terminal.rawValue
+    @AppStorage("AppAppearance") private var appAppearanceRaw: String = AppAppearance.system.rawValue
+    @AppStorage("StripMonochromeMeters") private var stripMonochrome: Bool = false
+
+    private var viewMode: SessionViewMode {
+        // Prefer persisted view mode when valid; otherwise derive from legacy renderModeRaw.
+        if let m = SessionViewMode(rawValue: viewModeRaw) {
+            return m
+        }
+        let legacy = TranscriptRenderMode(rawValue: renderModeRaw) ?? .normal
+        return SessionViewMode.from(legacy)
+    }
+
+    /// Keep the legacy TranscriptRenderMode preference in sync with SessionViewMode
+    /// so existing callers that read only renderModeRaw still behave correctly.
+    private func syncRenderModeWithViewMode() {
+        let mapped = viewMode.transcriptRenderMode.rawValue
+        if renderModeRaw != mapped {
+            renderModeRaw = mapped
+        }
+    }
+
+    // Auto-colorize in Terminal mode
+    private var shouldColorize: Bool {
+        return viewMode == .terminal
+    }
+
+    private var isJSONMode: Bool {
+        return viewMode == .json
+    }
+
+    private var unifiedQuery: String {
+        searchState.query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var unifiedFreeText: String {
+        let parsed = FilterEngine.parseOperators(unifiedQuery)
+        return parsed.freeText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isUnifiedSearchActive: Bool {
+        !unifiedQuery.isEmpty
+    }
+
+    private var isUnifiedNavigationVisible: Bool {
+        isUnifiedSearchActive && !unifiedFreeText.isEmpty
+    }
+
+    private var findQuery: String {
+        findQueryDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isFindActive: Bool {
+        isFindBarVisible && !findQuery.isEmpty
+    }
+
+    // Raw sheet
+    @State private var showRawSheet: Bool = false
+    // Selection for auto-scroll to find matches
+    @State private var selectedNSRange: NSRange? = nil
+    @State private var selectionScrollMode: SelectionScrollMode = .ensureVisible
+    @State private var tailUpdateState = TranscriptTailUpdateState()
+    // Ephemeral copy confirmation (popover)
+    @State private var showIDCopiedPopover: Bool = false
+    // Terminal-only jump trigger (Session view uses SessionTerminalView, not NSTextView selection)
+    @State private var terminalJumpToken: Int = 0
+    // Terminal-only role navigation trigger (User/Tools/Errors)
+    @State private var terminalRoleNavToken: Int = 0
+    @State private var terminalRoleNavRole: SessionTerminalView.RoleToggle = .user
+    @State private var terminalRoleNavDirection: Int = 1
+    @State private var pendingFirstRenderSessionID: String? = nil
+
+    // Text view navigation cursors (used for keyboard jumps)
+    @State private var lastUserJumpLocation: Int? = nil
+    @State private var lastToolsJumpLocation: Int? = nil
+    @State private var lastErrorJumpLocation: Int? = nil
+
+    // Simple memoization (for Codex)
+    @State private var transcriptCache: [String: String] = [:]
+    @State private var terminalCommandRangesCache: [String: [NSRange]] = [:]
+    @State private var terminalUserRangesCache: [String: [NSRange]] = [:]
+    @State private var lastResolvedSession: Session? = nil
+    @State private var lastBuildKey: String? = nil
+    @State private var lastRenderedSessionID: String? = nil
+    @State private var lastRenderedEventCount: Int = 0
+    @State private var lastRenderedTailEventID: String? = nil
+    @State private var lastRenderedTailEventSnapshot: SessionEvent? = nil
+    @State private var lastRenderedViewModeRaw: String = SessionViewMode.terminal.rawValue
+    @State private var lastRenderedAppendConfigKey: String? = nil
+
+    private var transcriptTraceEnabled: Bool {
+        ProcessInfo.processInfo.environment["AGENTSESSIONS_TRACE_TRANSCRIPT"] == "1"
+            || UserDefaults.standard.bool(forKey: "DebugTraceTranscript")
+    }
+
+    private func transcriptTrace(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        guard transcriptTraceEnabled else { return }
+        print("🧭[Transcript] \(message())")
+        #endif
+    }
+
+    private func sessionBuildKey(_ session: Session) -> String {
+        TranscriptSessionRenderKey.build(for: session)
+    }
+
+    private var renderKey: String {
+        guard let id = sessionID else { return "none" }
+
+        if let session = resolvedSessionForRender(id: id) {
+            return sessionBuildKey(session)
+        }
+        return "unresolved:\(id)"
+    }
+
+    private func resolvedSessionForRender(id: String) -> Session? {
+        let live = indexer.allSessions.first(where: { $0.id == id })
+        let preferred = TranscriptSessionResolutionPolicy.preferredSession(
+            live: live,
+            cached: lastResolvedSession,
+            sessionID: id,
+            isLoadingSession: indexer.isLoadingSession,
+            loadingSessionID: indexer.loadingSessionID
+        )
+        let liveCount = live?.events.count ?? -1
+        let cachedCount = (lastResolvedSession?.id == id ? lastResolvedSession?.events.count : nil) ?? -1
+        let preferredCount = preferred?.events.count ?? -1
+        transcriptTrace(
+            "resolve id=\(id) liveEvents=\(liveCount) cachedEvents=\(cachedCount) preferredEvents=\(preferredCount) loading=\(indexer.isLoadingSession ? 1 : 0) loadingID=\(indexer.loadingSessionID ?? "nil")"
+        )
+        if let live, live.events.isEmpty, let cached = lastResolvedSession, cached.id == id, !cached.events.isEmpty {
+            transcriptTrace("prefer-cached-non-empty id=\(id) cachedEvents=\(cached.events.count)")
+        }
+        return preferred
+    }
+
+    var body: some View {
+        let displaySession = sessionID.flatMap { id in resolvedSessionForRender(id: id) }
+
+        if sessionID != nil, let session = displaySession {
+            VStack(spacing: 0) {
+                toolbar(session: session)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(NSColor.controlBackgroundColor))
+                Divider()
+                ZStack(alignment: .bottom) {
+                    if viewMode == .terminal {
+                        terminalTranscriptView(session: session)
+                    } else {
+                        plainTranscriptView(session: session)
+                    }
+
+                    if shouldShowJumpToLatestButton {
+                        jumpToLatestButton
+                    }
+                }
+            }
+            .onAppear {
+                if lastRenderedSessionID != session.id || transcript.isEmpty {
+                    pendingFirstRenderSessionID = session.id
+                }
+                tailUpdateState.reset(
+                    sessionID: session.id,
+                    contentVersion: transcriptContentVersion(for: session)
+                )
+            }
+            .onChange(of: session.id) { _, _ in
+                if lastRenderedSessionID != session.id || transcript.isEmpty {
+                    pendingFirstRenderSessionID = session.id
+                }
+                tailUpdateState.reset(
+                    sessionID: session.id,
+                    contentVersion: transcriptContentVersion(for: session)
+                )
+            }
+            .onChange(of: renderKey) { oldValue, newValue in
+                transcriptTrace("renderKey changed id=\(sessionID ?? "nil") old=\(oldValue) new=\(newValue)")
+            }
+            .onChange(of: transcriptContentVersion(for: session)) { _, newValue in
+                tailUpdateState.contentVersionChanged(
+                    sessionID: session.id,
+                    contentVersion: newValue
+                )
+            }
+            .task(id: renderKey) {
+                guard let id = sessionID else { return }
+
+                guard let resolvedSession = resolvedSessionForRender(id: id) else { return }
+                transcriptTrace("task rebuild id=\(id) events=\(resolvedSession.events.count) eventCount=\(resolvedSession.eventCount)")
+                rebuild(session: resolvedSession)
+            }
+            .onChange(of: viewModeRaw) { _, _ in
+                syncRenderModeWithViewMode()
+                rebuild(session: session)
+            }
+            .onChange(of: searchState.query) { _, newValue in
+                unifiedSearchJumpWorkItem?.cancel()
+                unifiedSearchJumpWorkItem = nil
+                if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    pendingAutoJumpToken = nil
+                    pendingAutoJumpSessionID = nil
+                }
+                selectedNSRange = nil
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    performUnifiedFind(resetIndex: true, shouldJump: false)
+                    return
+                }
+                let work = DispatchWorkItem { [trimmed] in
+                    let current = searchState.query.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard current == trimmed else { return }
+                    performUnifiedFind(resetIndex: true, shouldJump: true)
+                }
+                unifiedSearchJumpWorkItem = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+            }
+            .onChange(of: searchState.autoJumpToken) { _, newValue in
+                guard searchState.autoJumpSessionID == session.id, isUnifiedSearchActive else { return }
+                pendingAutoJumpToken = newValue
+                pendingAutoJumpSessionID = session.id
+                applyAutoJumpIfReady(session: session)
+            }
+            .onChange(of: focusCoordinator.activeFocus) { oldFocus, newFocus in
+                if newFocus == .transcriptFind {
+                    isFindBarVisible = true
+                    isFindFieldFocused = true
+                } else if oldFocus == .transcriptFind {
+                    isFindFieldFocused = false
+                } else if newFocus != .transcriptFind && newFocus != .none {
+                    isFindFieldFocused = false
+                }
+            }
+            .sheet(isPresented: $showRawSheet) { WholeSessionRawPrettySheet(session: session) }
+            .onChange(of: indexer.requestOpenRawSheet) { _, newVal in
+                if newVal {
+                    showRawSheet = true
+                    indexer.requestOpenRawSheet = false
+                }
+            }
+        } else {
+            Text("Select a session to view transcript")
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear {
+                    pendingFirstRenderSessionID = nil
+                    transcriptTrace(
+                        "placeholder visible sessionID=\(sessionID ?? "nil") lastResolvedID=\(lastResolvedSession?.id ?? "nil") lastResolvedEvents=\(lastResolvedSession?.events.count ?? -1)"
+                    )
+                }
+        }
+    }
+
+    private func transcriptContentVersion(for session: Session) -> Int {
+        var hasher = Hasher()
+        hasher.combine(session.id)
+        hasher.combine(session.eventCount)
+        hasher.combine(session.events.count)
+        hasher.combine(session.events.last?.id ?? "")
+        hasher.combine(session.endTime?.timeIntervalSince1970 ?? 0)
+        return hasher.finalize()
+    }
+
+    private var shouldShowJumpToLatestButton: Bool {
+        tailUpdateState.shouldShowJumpToLatestButton
+    }
+
+    private var jumpToLatestButton: some View {
+        Button(action: {
+            tailUpdateState.jumpToLatest()
+        }) {
+            ZStack {
+                Circle()
+                    .fill(Color.white)
+                Circle()
+                    .stroke(Color.black.opacity(0.18), lineWidth: 1)
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 13, weight: .regular))
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(Color.black)
+            }
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .help("Jump to latest output")
+        .accessibilityLabel("Jump to latest output")
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 12)
+        .zIndex(4)
+    }
+
+    private func updateBottomProximity(_ isNearBottom: Bool) {
+        tailUpdateState.viewportChanged(isNearBottom: isNearBottom)
+    }
+
+    private func terminalTranscriptView(session: Session) -> some View {
+        SessionTerminalView(
+            session: session,
+            unifiedQuery: unifiedFreeText,
+            unifiedFindToken: terminalUnifiedFindToken,
+            unifiedFindDirection: terminalUnifiedFindDirection,
+            unifiedFindReset: terminalUnifiedFindResetFlag,
+            unifiedAllowMatchAutoScroll: terminalUnifiedAllowMatchAutoScroll,
+            unifiedExternalMatchCount: $terminalUnifiedMatchesCount,
+            unifiedExternalTotalMatchCount: $terminalUnifiedTotalMatchesCount,
+            unifiedExternalCurrentMatchIndex: $terminalUnifiedCurrentIndex,
+            findQuery: findQuery,
+            findToken: terminalFindToken,
+            findDirection: terminalFindDirection,
+            findReset: terminalFindResetFlag,
+            allowMatchAutoScroll: terminalAllowMatchAutoScroll,
+            scrollToBottomToken: tailUpdateState.scrollToBottomToken,
+            onBottomProximityChange: updateBottomProximity,
+            onRenderComplete: { id in
+                if pendingFirstRenderSessionID == id {
+                    pendingFirstRenderSessionID = nil
+                }
+            },
+            jumpToken: terminalJumpToken,
+            roleNavToken: terminalRoleNavToken,
+            roleNavRole: terminalRoleNavRole,
+            roleNavDirection: terminalRoleNavDirection,
+            externalMatchCount: $terminalFindMatchesCount,
+            externalTotalMatchCount: $terminalFindTotalMatchesCount,
+            externalCurrentMatchIndex: $terminalFindCurrentIndex
+        )
+    }
+
+    private func plainTranscriptView(session: Session) -> some View {
+        let roleRangesEnabled = shouldColorize || isJSONMode
+        return PlainTextScrollView(
+            proximityContextID: session.id,
+            text: transcript,
+            selection: selectedNSRange,
+            selectionScrollMode: selectionScrollMode,
+            fontSize: CGFloat(transcriptFontSize),
+            highlights: unifiedHighlightRanges,
+            currentIndex: unifiedCurrentMatchIndex,
+            findCurrentRange: findCurrentRange,
+            scrollToBottomToken: tailUpdateState.scrollToBottomToken,
+            onBottomProximityChange: updateBottomProximity,
+            commandRanges: roleRangesEnabled ? commandRanges : [],
+            userRanges: roleRangesEnabled ? userRanges : [],
+            assistantRanges: roleRangesEnabled ? assistantRanges : [],
+            outputRanges: roleRangesEnabled ? outputRanges : [],
+            errorRanges: roleRangesEnabled ? errorRanges : [],
+            isJSONMode: isJSONMode,
+            appAppearanceRaw: appAppearanceRaw,
+            colorScheme: colorScheme,
+            monochrome: stripMonochrome
+        )
+    }
+
+    private func toolbar(session: Session) -> some View {
+        ViewThatFits(in: .horizontal) {
+            toolbarLayout(session: session, placeUnifiedPillInline: true)
+            toolbarLayout(session: session, placeUnifiedPillInline: false)
+        }
+        .overlay(alignment: .topLeading) {
+            toolbarShortcutButtons
+        }
+    }
+
+    private func toolbarLayout(session: Session, placeUnifiedPillInline: Bool) -> some View {
+        VStack(spacing: 0) {
+            toolbarTopRow(session: session, placeUnifiedPillInline: placeUnifiedPillInline)
+                .frame(height: 44)
+                .background(Color(NSColor.controlBackgroundColor))
+
+            if isFindBarVisible {
+                findBar
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(NSColor.controlBackgroundColor))
+            }
+
+            if isUnifiedNavigationVisible && !placeUnifiedPillInline {
+                unifiedNavigationPill
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+                    .background(Color(NSColor.controlBackgroundColor))
+            }
+        }
+    }
+
+    private func toolbarTopRow(session: Session, placeUnifiedPillInline: Bool) -> some View {
+        HStack(spacing: 0) {
+            // === LEADING GROUP: View mode + JSON status + ID ===
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Picker("View Style", selection: $viewModeRaw) {
+                        Text("Session")
+                            .tag(SessionViewMode.terminal.rawValue)
+                            .help("Session view — terminal-inspired output with colorized commands and tool output. Cmd+Shift+T toggles between Text and Session.")
+                        Text("Text")
+                            .tag(SessionViewMode.transcript.rawValue)
+                            .help("Text view — merged chat and tools. Cmd+Shift+T toggles between Text and Session.")
+                        Text("JSON")
+                            .tag(SessionViewMode.json.rawValue)
+                            .help("JSON view — formatted session JSON for readability. Encrypted blobs and large text blocks are summarized; use the session file on disk for raw JSON.")
+                    }
+                    .pickerStyle(.segmented)
+                    .font(TranscriptToolbarStyle.baseFont)
+                    .labelsHidden()
+                    .controlSize(.regular)
+                    .frame(width: 200)
+                    .accessibilityLabel("View Style")
+
+                    if isJSONMode && isBuildingJSON {
+                        HStack(spacing: 6) {
+                            Image(systemName: "hourglass")
+                            Text("Building JSON view…")
+                        }
+                        .font(TranscriptToolbarStyle.compactFont)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    if let fullID = sessionIDExtractor(session) {
+                        let displayLast4 = String(fullID.suffix(4))
+                        let short = extractShortID(for: session) ?? String(fullID.prefix(6))
+                        Button(action: { copySessionID(for: session) }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "doc.on.doc")
+                                    .imageScale(.medium)
+                                Text("ID \(displayLast4)")
+                                    .font(TranscriptToolbarStyle.baseFont)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Copy session ID: \(short) (⌘⇧C)")
+                        .accessibilityLabel("Copy Session ID")
+                        .keyboardShortcut("c", modifiers: [.command, .shift])
+                        .popover(isPresented: $showIDCopiedPopover, arrowEdge: .bottom) {
+                            Text("ID Copied!")
+                                .padding(8)
+                                .font(TranscriptToolbarStyle.popoverFont)
+                        }
+                    }
+                    if StarredSessionsStore().contains(id: session.id, source: session.source) {
+                        pinnedBadge(session: session)
+                    }
+                }
+                .padding(.leading, 12)
+            }
+            .padding(.leading, TranscriptToolbarStyle.leadingPadding)
+
+            Spacer(minLength: 12)
+
+            if placeUnifiedPillInline && isUnifiedNavigationVisible {
+                unifiedNavigationPillBody
+                    .frame(minWidth: 240, maxWidth: 520)
+                    .layoutPriority(1)
+            }
+
+            Spacer(minLength: 12)
+
+            // === TRAILING GROUP: Copy + Find ===
+            HStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    Button(action: { adjustFont(-1) }) {
+                        HStack(spacing: 2) {
+                            Text("A").font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            Text("−").font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut("-", modifiers: .command)
+                    .help("Decrease text size (⌘−)")
+                    .accessibilityLabel("Decrease Text Size")
+
+                    Button(action: { adjustFont(1) }) {
+                        HStack(spacing: 2) {
+                            Text("A").font(.system(size: 14, weight: .semibold, design: .monospaced))
+                            Text("+").font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut("+", modifiers: .command)
+                    .help("Increase text size (⌘+)")
+                    .accessibilityLabel("Increase Text Size")
+                }
+
+                Divider().frame(height: 20)
+
+                Button("Copy") { copyAll() }
+                    .buttonStyle(.borderless)
+                    .font(TranscriptToolbarStyle.baseFont)
+                    .help("Copy entire transcript to clipboard (⌥⌘C)")
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+                    .accessibilityLabel("Copy Transcript")
+
+                Divider().frame(height: 20)
+
+                Button("Export") { exportMarkdown(session: session) }
+                    .buttonStyle(.borderless)
+                    .font(TranscriptToolbarStyle.baseFont)
+                    .help("Export transcript as Markdown")
+                    .accessibilityLabel("Export Transcript")
+
+                Divider().frame(height: 20)
+
+                Button(action: {
+                    if isFindBarVisible {
+                        closeFind()
+                    } else {
+                        focusCoordinator.perform(.openTranscriptFind)
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
+                        Text(isFindBarVisible ? "Done" : "Find")
+                            .font(TranscriptToolbarStyle.baseFont)
+                        if !isFindBarVisible {
+                            Text("⌘F")
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("Find in session (⌘F)")
+                .accessibilityLabel("Find in session")
+            }
+            .padding(.trailing, 12)
+        }
+    }
+
+    @ViewBuilder
+    private var toolbarShortcutButtons: some View {
+        // Keyboard shortcuts only; keep them zero-size to avoid visual artifacts.
+        shortcutButton(action: { focusCoordinator.perform(.openTranscriptFind) }, key: "f", modifiers: .command)
+        shortcutButton(action: { navigateNextMatch(direction: -1) }, key: "g", modifiers: [.command, .shift])
+        shortcutButton(action: { navigateNextMatch(direction: 1) }, key: "g", modifiers: .command)
+        shortcutButton(action: {
+            let current = SessionViewMode.from(TranscriptRenderMode(rawValue: renderModeRaw) ?? .normal)
+            let next: SessionViewMode
+            switch current {
+            case .transcript:
+                next = .terminal
+            case .terminal:
+                next = .transcript
+            case .json:
+                // From JSON, Cmd+Shift+T toggles back to Text.
+                next = .transcript
+            }
+            viewModeRaw = next.rawValue
+            renderModeRaw = next.transcriptRenderMode.rawValue
+        }, key: "t", modifiers: [.command, .shift])
+        shortcutButton(action: { jumpUser(direction: 1) }, key: .downArrow, modifiers: [.command, .option])
+        shortcutButton(action: { jumpUser(direction: -1) }, key: .upArrow, modifiers: [.command, .option])
+        shortcutButton(action: { jumpTools(direction: 1) }, key: .rightArrow, modifiers: [.command, .option])
+        shortcutButton(action: { jumpTools(direction: -1) }, key: .leftArrow, modifiers: [.command, .option])
+        shortcutButton(action: { jumpErrors(direction: 1) }, key: .downArrow, modifiers: [.command, .option, .shift])
+        shortcutButton(action: { jumpErrors(direction: -1) }, key: .upArrow, modifiers: [.command, .option, .shift])
+    }
+
+    private func shortcutButton(action: @escaping () -> Void,
+                                key: KeyEquivalent,
+                                modifiers: EventModifiers) -> some View {
+        Button(action: action) { EmptyView() }
+            .keyboardShortcut(key, modifiers: modifiers)
+            .buttonStyle(.plain)
+            .focusable(false)
+            .frame(width: 0, height: 0)
+    }
+
+	    private var findBar: some View {
+	        HStack(spacing: 10) {
+	            Image(systemName: "magnifyingglass")
+	                .foregroundStyle(.secondary)
+
+            TextField("Find in session", text: $findQueryDraft)
+                .textFieldStyle(.plain)
+                .font(TranscriptToolbarStyle.baseFont)
+                .focused($isFindFieldFocused)
+                .help("Find in session (⌘F)")
+                .onChange(of: findQueryDraft) { _, _ in
+                    performFind(resetIndex: true, shouldJump: true)
+                }
+                .onSubmit {
+                    performFind(resetIndex: false, direction: 1, shouldJump: true)
+                }
+                .onExitCommand {
+                    guard isFindFieldFocused else { return }
+                    handleFindFieldEscape()
+                }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 6) {
+                Button(action: { performFind(resetIndex: false, direction: -1, shouldJump: true) }) {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isFindNavigationDisabled)
+                .help("Previous match (⇧⌘G)")
+
+                Text(findQuery.isEmpty ? "0/0" : findStatus())
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(isFindNavigationDisabled ? .red : .secondary)
+                    .frame(minWidth: 44, alignment: .center)
+
+                Button(action: { performFind(resetIndex: false, direction: 1, shouldJump: true) }) {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isFindNavigationDisabled)
+                .help("Next match (⌘G)")
+
+                Button(action: {
+                    if findQueryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        closeFind()
+                    } else {
+                        findQueryDraft = ""
+                        performFind(resetIndex: true, shouldJump: false)
+                    }
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(findQueryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Close Find (⎋)" : "Clear Find (⎋)")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    private var unifiedNavigationPill: some View {
+        HStack {
+            Spacer()
+            unifiedNavigationPillBody
+            Spacer()
+        }
+    }
+
+    private var unifiedNavigationPillBody: some View {
+            HStack(spacing: 10) {
+                Text(unifiedQuery)
+                    .font(TranscriptToolbarStyle.baseFont)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(minWidth: 80, idealWidth: 180, maxWidth: 360, alignment: .leading)
+
+                Divider().frame(height: 16)
+
+                Button(action: { performUnifiedFind(resetIndex: false, direction: -1, shouldJump: true) }) {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isUnifiedNavigationDisabled)
+                .help("Previous Unified Search match (⇧⌘G)")
+
+                Text(unifiedStatus())
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(isUnifiedNavigationDisabled ? .red : .secondary)
+                    .frame(minWidth: 44, alignment: .center)
+
+                Button(action: { performUnifiedFind(resetIndex: false, direction: 1, shouldJump: true) }) {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isUnifiedNavigationDisabled)
+                .help("Next Unified Search match (⌘G)")
+
+                Button(action: clearSearch) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear Unified Search")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.accentColor.opacity(0.22), lineWidth: 1)
+            )
+            .help("Unified Search matches (⌥⌘F, ⌘G, ⇧⌘G)")
+    }
+
+    private func beginRenderGeneration() -> Int {
+        rebuildTask?.cancel()
+        rebuildTask = nil
+        jsonBuildTask?.cancel()
+        jsonBuildTask = nil
+        isBuildingJSON = false
+        return renderGate.begin()
+    }
+
+    private func canApplyRender(sessionID expectedSessionID: String, generation: Int) -> Bool {
+        renderGate.allowsApply(candidateGeneration: generation,
+                               activeSessionID: sessionID,
+                               expectedSessionID: expectedSessionID)
+    }
+
+    private func rebuild(session: Session) {
+        transcriptTrace("rebuild start id=\(session.id) events=\(session.events.count) eventCount=\(session.eventCount) viewMode=\(viewModeRaw)")
+        lastResolvedSession = session
+        let generation = beginRenderGeneration()
+
+        syncRenderModeWithViewMode()
+        let viewModeSnapshot = viewMode
+        let filters: TranscriptFilters = .current(showTimestamps: showTimestamps, showMeta: false)
+        let mode = viewModeSnapshot.transcriptRenderMode
+        let skipFlag = skipAgentsPreambleEnabled() ? 1 : 0
+        let sessionKey = sessionBuildKey(session)
+        let buildKey = "\(sessionKey)|\(viewModeSnapshot.rawValue)|\(showTimestamps ? 1 : 0)|\(skipFlag)"
+        let appendConfigKey = makeAppendConfigKey(viewMode: viewModeSnapshot,
+                                                  showTimestamps: showTimestamps,
+                                                  skipFlag: skipFlag)
+        if let appendConfigKey,
+           tryAppendTranscriptTail(session: session,
+                                   filters: filters,
+                                   mode: mode,
+                                   appendConfigKey: appendConfigKey,
+                                   buildKey: buildKey,
+                                   shouldCache: enableCaching) {
+            lastBuildKey = buildKey
+            return
+        }
+
+        #if DEBUG
+        print("🔨 REBUILD: mode=\(mode) shouldColorize=\(shouldColorize) enableCaching=\(enableCaching)")
+        #endif
+
+        if enableCaching {
+            // Memoization key includes lightweight metadata so active-session tails refresh
+            // even when events are lazily loaded.
+            let key = buildKey
+            if lastBuildKey == key { return }
+            // Try in-view memo cache first
+            if let cached = transcriptCache[key] {
+                setRenderedTranscript(decorateTranscriptIfNeeded(cached, session: session),
+                                      session: session,
+                                      renderedViewMode: viewModeSnapshot,
+                                      appendConfigKey: appendConfigKey)
+                if viewModeSnapshot == .json {
+                    let hasToolCommands = session.events.contains { $0.kind == .tool_call }
+                    scheduleJSONBuild(session: session,
+                                      key: key,
+                                      shouldCache: true,
+                                      hasCommands: hasToolCommands,
+                                      renderedViewMode: viewModeSnapshot,
+                                      renderedAppendConfigKey: appendConfigKey,
+                                      cachedText: cached,
+                                      generation: generation)
+                    return
+                }
+                if viewModeSnapshot == .terminal && shouldColorize {
+                    commandRanges = terminalCommandRangesCache[key] ?? []
+                    userRanges = terminalUserRangesCache[key] ?? []
+                    hasCommands = !(commandRanges.isEmpty)
+                    findAdditionalRanges()
+                } else {
+                    commandRanges = []; userRanges = []; assistantRanges = []; outputRanges = []; errorRanges = []
+                    hasCommands = session.events.contains { $0.kind == .tool_call }
+                    computeNavigationRangesIfNeeded()
+                }
+                lastBuildKey = key
+                // Reset Unified Search navigation state
+                performUnifiedFind(resetIndex: true, shouldJump: false)
+                selectedNSRange = nil
+                resetJumpCursors()
+                applyAutoJumpIfReady(session: session)
+                maybeAutoJumpToFirstPrompt(session: session)
+                return
+            }
+
+            // JSON mode: build pretty-printed JSON once and cache it; skip indexer caches.
+            if viewModeSnapshot == .json {
+                let hasToolCommands = session.events.contains { $0.kind == .tool_call }
+                scheduleJSONBuild(session: session,
+                                  key: key,
+                                  shouldCache: true,
+                                  hasCommands: hasToolCommands,
+                                  renderedViewMode: viewModeSnapshot,
+                                  renderedAppendConfigKey: appendConfigKey,
+                                  generation: generation)
+                return
+            }
+
+            // Try external indexer transcript caches (Codex/Claude/Gemini) without generation
+            if FeatureFlags.offloadTranscriptBuildInView {
+                if let t = externalCachedTranscript(for: session.id) {
+                    let decorated = decorateTranscriptIfNeeded(t, session: session)
+                    setRenderedTranscript(decorated,
+                                          session: session,
+                                          renderedViewMode: viewModeSnapshot,
+                                          appendConfigKey: appendConfigKey)
+                    commandRanges = []; userRanges = []; assistantRanges = []; outputRanges = []; errorRanges = []
+                    hasCommands = session.events.contains { $0.kind == .tool_call }
+                    computeNavigationRangesIfNeeded()
+                    transcriptCache[key] = decorated
+                    lastBuildKey = key
+                    performUnifiedFind(resetIndex: true, shouldJump: false)
+                    selectedNSRange = nil
+                    resetJumpCursors()
+                    applyAutoJumpIfReady(session: session)
+                    maybeAutoJumpToFirstPrompt(session: session)
+                    return
+                }
+
+                // Build off-main to avoid UI stalls
+                let prio: TaskPriority = FeatureFlags.lowerQoSForHeavyWork ? .utility : .userInitiated
+                let shouldColorize = self.shouldColorize
+                let sessionSnapshot = session
+                rebuildTask = Task.detached(priority: prio) { [filters] in
+                    let sessionHasCommands = sessionSnapshot.events.contains { $0.kind == .tool_call }
+                    if mode == .terminal && shouldColorize && sessionHasCommands {
+                        let built = SessionTranscriptBuilder.buildTerminalPlainWithRanges(session: sessionSnapshot, filters: filters)
+                        await MainActor.run {
+                            guard !Task.isCancelled else { return }
+                            guard self.canApplyRender(sessionID: sessionSnapshot.id, generation: generation) else { return }
+                            let decorated = self.decorateTranscriptIfNeeded(built.0, session: sessionSnapshot)
+                            self.setRenderedTranscript(decorated,
+                                                       session: sessionSnapshot,
+                                                       renderedViewMode: viewModeSnapshot,
+                                                       appendConfigKey: appendConfigKey)
+                            self.commandRanges = built.1
+                            self.userRanges = built.2
+                            self.assistantRanges = []
+                            self.outputRanges = []
+                            self.errorRanges = []
+                            self.hasCommands = true
+                            self.findAdditionalRanges()
+                            self.transcriptCache[key] = decorated
+                            self.terminalCommandRangesCache[key] = built.1
+                            self.terminalUserRangesCache[key] = built.2
+                            self.lastBuildKey = key
+		                            self.performUnifiedFind(resetIndex: true, shouldJump: false)
+                            self.selectedNSRange = nil
+                            self.applyAutoJumpIfReady(session: sessionSnapshot)
+                            self.maybeAutoJumpToFirstPrompt(session: sessionSnapshot)
+                        }
+                    } else {
+                        let t = SessionTranscriptBuilder.buildPlainTerminalTranscript(session: sessionSnapshot, filters: filters, mode: .normal)
+                        await MainActor.run {
+                            guard !Task.isCancelled else { return }
+                            guard self.canApplyRender(sessionID: sessionSnapshot.id, generation: generation) else { return }
+                            let decorated = self.decorateTranscriptIfNeeded(t, session: sessionSnapshot)
+                            self.setRenderedTranscript(decorated,
+                                                       session: sessionSnapshot,
+                                                       renderedViewMode: viewModeSnapshot,
+                                                       appendConfigKey: appendConfigKey)
+                            self.commandRanges = []
+                            self.userRanges = []
+                            self.assistantRanges = []
+                            self.outputRanges = []
+                            self.errorRanges = []
+                            self.hasCommands = sessionHasCommands
+                            self.computeNavigationRangesIfNeeded()
+                            self.transcriptCache[key] = decorated
+                            self.lastBuildKey = key
+		                            self.performUnifiedFind(resetIndex: true, shouldJump: false)
+                            self.selectedNSRange = nil
+                            self.resetJumpCursors()
+                            self.applyAutoJumpIfReady(session: sessionSnapshot)
+                            self.maybeAutoJumpToFirstPrompt(session: sessionSnapshot)
+                        }
+                    }
+                }
+                return
+            }
+
+            // Fallback: synchronous build (legacy behavior)
+            let sessionHasCommands = session.events.contains { $0.kind == .tool_call }
+            if mode == .terminal && shouldColorize && sessionHasCommands {
+                let built = SessionTranscriptBuilder.buildTerminalPlainWithRanges(session: session, filters: filters)
+                setRenderedTranscript(decorateTranscriptIfNeeded(built.0, session: session),
+                                      session: session,
+                                      renderedViewMode: viewModeSnapshot,
+                                      appendConfigKey: appendConfigKey)
+                commandRanges = built.1
+                userRanges = built.2
+                assistantRanges = []
+                outputRanges = []
+                errorRanges = []
+                findAdditionalRanges()
+                transcriptCache[key] = transcript
+                terminalCommandRangesCache[key] = commandRanges
+                terminalUserRangesCache[key] = userRanges
+                lastBuildKey = key
+            } else {
+                setRenderedTranscript(decorateTranscriptIfNeeded(SessionTranscriptBuilder.buildPlainTerminalTranscript(session: session, filters: filters, mode: .normal), session: session),
+                                      session: session,
+                                      renderedViewMode: viewModeSnapshot,
+                                      appendConfigKey: appendConfigKey)
+                commandRanges = []
+                userRanges = []
+                assistantRanges = []
+                outputRanges = []
+                errorRanges = []
+                computeNavigationRangesIfNeeded()
+                transcriptCache[key] = transcript
+                lastBuildKey = key
+            }
+        } else {
+            // No caching (Claude)
+            let sessionHasCommands2 = session.events.contains { $0.kind == .tool_call }
+            if viewModeSnapshot == .json {
+                scheduleJSONBuild(session: session,
+                                  key: buildKey,
+                                  shouldCache: false,
+                                  hasCommands: sessionHasCommands2,
+                                  renderedViewMode: viewModeSnapshot,
+                                  renderedAppendConfigKey: appendConfigKey,
+                                  generation: generation)
+                return
+            }
+
+            // Build off-main to avoid UI stalls on heavy sessions (e.g., Chrome MCP screenshots).
+            let prio: TaskPriority = FeatureFlags.lowerQoSForHeavyWork ? .utility : .userInitiated
+            let shouldColorizeSnapshot = shouldColorize
+            let modeSnapshot = mode
+            let keySnapshot = buildKey
+            let sessionSnapshot = session
+            rebuildTask = Task.detached(priority: prio) {
+                if modeSnapshot == .terminal && shouldColorizeSnapshot && sessionHasCommands2 {
+                    let built = SessionTranscriptBuilder.buildTerminalPlainWithRanges(session: sessionSnapshot, filters: filters)
+                    await MainActor.run {
+                        guard !Task.isCancelled else { return }
+                        guard self.canApplyRender(sessionID: sessionSnapshot.id, generation: generation) else { return }
+                        let decorated = self.decorateTranscriptIfNeeded(built.0, session: sessionSnapshot)
+                        self.setRenderedTranscript(decorated,
+                                                   session: sessionSnapshot,
+                                                   renderedViewMode: viewModeSnapshot,
+                                                   appendConfigKey: appendConfigKey)
+                        // In terminal mode, the UI uses SessionTerminalView; keep these empty to avoid extra scans.
+                        self.commandRanges = []
+                        self.userRanges = []
+                        self.assistantRanges = []
+                        self.outputRanges = []
+	                        self.errorRanges = []
+	                        self.hasCommands = true
+	                        self.lastBuildKey = keySnapshot
+	                        self.performUnifiedFind(resetIndex: true, shouldJump: false)
+	                        self.selectedNSRange = nil
+	                        self.resetJumpCursors()
+	                        self.applyAutoJumpIfReady(session: sessionSnapshot)
+	                        self.maybeAutoJumpToFirstPrompt(session: sessionSnapshot)
+                    }
+                } else {
+                    let t = SessionTranscriptBuilder.buildPlainTerminalTranscript(session: sessionSnapshot, filters: filters, mode: .normal)
+                    await MainActor.run {
+                        guard !Task.isCancelled else { return }
+                        guard self.canApplyRender(sessionID: sessionSnapshot.id, generation: generation) else { return }
+                        let decorated = self.decorateTranscriptIfNeeded(t, session: sessionSnapshot)
+                        self.setRenderedTranscript(decorated,
+                                                   session: sessionSnapshot,
+                                                   renderedViewMode: viewModeSnapshot,
+                                                   appendConfigKey: appendConfigKey)
+                        self.commandRanges = []
+                        self.userRanges = []
+                        self.assistantRanges = []
+                        self.outputRanges = []
+                        self.errorRanges = []
+                        self.hasCommands = sessionHasCommands2
+                        if self.viewMode != .terminal && self.viewMode != .json {
+                            self.computeNavigationRangesIfNeeded()
+	                        }
+	                        self.lastBuildKey = keySnapshot
+	                        self.performUnifiedFind(resetIndex: true, shouldJump: false)
+	                        self.selectedNSRange = nil
+	                        self.resetJumpCursors()
+	                        self.applyAutoJumpIfReady(session: sessionSnapshot)
+	                        self.maybeAutoJumpToFirstPrompt(session: sessionSnapshot)
+                    }
+                }
+            }
+            return
+        }
+
+	        // Reset Unified Search navigation state
+	        performUnifiedFind(resetIndex: true, shouldJump: false)
+	        selectedNSRange = nil
+	        resetJumpCursors()
+	        applyAutoJumpIfReady(session: session)
+	        maybeAutoJumpToFirstPrompt(session: session)
+	    }
+
+    private func setRenderedTranscript(_ text: String,
+                                       session: Session,
+                                       renderedViewMode: SessionViewMode,
+                                       appendConfigKey: String? = nil) {
+        transcript = text
+        lastRenderedSessionID = session.id
+        lastRenderedEventCount = session.events.count
+        lastRenderedTailEventID = session.events.last?.id
+        lastRenderedTailEventSnapshot = session.events.last
+        lastRenderedViewModeRaw = renderedViewMode.rawValue
+        lastRenderedAppendConfigKey = appendConfigKey
+        if pendingFirstRenderSessionID == session.id, renderedViewMode != .terminal {
+            pendingFirstRenderSessionID = nil
+        }
+    }
+
+    private func makeAppendConfigKey(viewMode: SessionViewMode,
+                                     showTimestamps: Bool,
+                                     skipFlag: Int) -> String? {
+        guard viewMode == .transcript else { return nil }
+        return "\(viewMode.rawValue)|\(showTimestamps ? 1 : 0)|\(skipFlag)"
+    }
+
+    private func tryAppendTranscriptTail(session: Session,
+                                         filters: TranscriptFilters,
+                                         mode: TranscriptRenderMode,
+                                         appendConfigKey: String,
+                                         buildKey: String,
+                                         shouldCache: Bool) -> Bool {
+        guard viewMode == .transcript else { return false }
+        guard lastRenderedViewModeRaw == SessionViewMode.transcript.rawValue else { return false }
+        guard lastRenderedSessionID == session.id else { return false }
+        guard lastRenderedAppendConfigKey == appendConfigKey else { return false }
+        guard session.events.count > lastRenderedEventCount else { return false }
+        guard lastRenderedEventCount >= 0 else { return false }
+        guard lastRenderedEventCount <= session.events.count else { return false }
+        guard !transcript.isEmpty else { return false }
+
+        if lastRenderedEventCount > 0 {
+            guard let previousTailID = lastRenderedTailEventID,
+                  let previousTailSnapshot = lastRenderedTailEventSnapshot,
+                  session.events.indices.contains(lastRenderedEventCount - 1),
+                  session.events[lastRenderedEventCount - 1].id == previousTailID,
+                  session.events[lastRenderedEventCount - 1] == previousTailSnapshot else {
+                return false
+            }
+            let showMeta = filtersShowMeta(filters)
+            guard let previousRenderable = lastRenderableEvent(in: session,
+                                                               beforeRawIndex: lastRenderedEventCount,
+                                                               showMeta: showMeta),
+                  let nextRenderable = firstRenderableEvent(in: session,
+                                                            fromRawIndex: lastRenderedEventCount,
+                                                            showMeta: showMeta) else {
+                return false
+            }
+            guard SessionTranscriptBuilder.isAppendBoundarySafe(previous: previousRenderable, next: nextRenderable) else {
+                return false
+            }
+        }
+
+        let appended = SessionTranscriptBuilder.buildPlainTerminalTranscript(
+            events: session.events[lastRenderedEventCount..<session.events.count],
+            source: session.source,
+            filters: filters,
+            mode: mode
+        )
+        guard !appended.isEmpty else { return false }
+
+        let combined = decorateTranscriptIfNeeded(transcript + appended, session: session)
+        setRenderedTranscript(combined,
+                              session: session,
+                              renderedViewMode: .transcript,
+                              appendConfigKey: appendConfigKey)
+        if shouldCache {
+            transcriptCache[buildKey] = combined
+        }
+        commandRanges = []
+        userRanges = []
+        assistantRanges = []
+        outputRanges = []
+        errorRanges = []
+        hasCommands = session.events.contains { $0.kind == .tool_call }
+        computeNavigationRangesIfNeeded()
+        performUnifiedFind(resetIndex: true, shouldJump: false)
+        selectedNSRange = nil
+        resetJumpCursors()
+        applyAutoJumpIfReady(session: session)
+        maybeAutoJumpToFirstPrompt(session: session)
+        return true
+    }
+
+    private func filtersShowMeta(_ filters: TranscriptFilters) -> Bool {
+        switch filters {
+        case let .current(_, showMeta):
+            return showMeta
+        }
+    }
+
+    private func isRenderableEvent(_ event: SessionEvent, showMeta: Bool) -> Bool {
+        showMeta || event.kind != .meta
+    }
+
+    private func lastRenderableEvent(in session: Session,
+                                     beforeRawIndex: Int,
+                                     showMeta: Bool) -> SessionEvent? {
+        guard beforeRawIndex > 0 else { return nil }
+        for idx in stride(from: beforeRawIndex - 1, through: 0, by: -1) {
+            let event = session.events[idx]
+            if isRenderableEvent(event, showMeta: showMeta) {
+                return event
+            }
+        }
+        return nil
+    }
+
+    private func firstRenderableEvent(in session: Session,
+                                      fromRawIndex: Int,
+                                      showMeta: Bool) -> SessionEvent? {
+        guard fromRawIndex < session.events.count else { return nil }
+        for idx in fromRawIndex..<session.events.count {
+            let event = session.events[idx]
+            if isRenderableEvent(event, showMeta: showMeta) {
+                return event
+            }
+        }
+        return nil
+    }
+
+    private func externalCachedTranscript(for id: String) -> String? {
+        // Attempt to read from indexer-level caches (non-generating)
+        if let codex = indexer as? SessionIndexer {
+            return codex.searchTranscriptCache.getCached(id)
+        } else if let claude = indexer as? ClaudeSessionIndexer {
+            return claude.searchTranscriptCache.getCached(id)
+        } else if let gemini = indexer as? GeminiSessionIndexer {
+            return gemini.searchTranscriptCache.getCached(id)
+        }
+        return nil
+    }
+
+	    private func performUnifiedFind(resetIndex: Bool, direction: Int = 1, shouldJump: Bool = true) {
+	        // Terminal mode uses a dedicated line-based search in SessionTerminalView.
+	        if viewMode == .terminal {
+            let q = unifiedFreeText
+            guard !q.isEmpty else {
+                terminalUnifiedMatchesCount = 0
+                terminalUnifiedTotalMatchesCount = 0
+                terminalUnifiedCurrentIndex = 0
+                terminalUnifiedAllowMatchAutoScroll = false
+                terminalUnifiedFindToken &+= 1
+                selectedNSRange = nil
+                return
+	            }
+                terminalUnifiedAllowMatchAutoScroll = shouldJump
+	            terminalUnifiedFindDirection = direction
+	            terminalUnifiedFindResetFlag = resetIndex
+	            terminalUnifiedFindToken &+= 1
+	            return
+        }
+
+	        let q = unifiedFreeText
+	        guard !q.isEmpty else {
+	            unifiedMatches = []
+	            unifiedCurrentMatchIndex = 0
+	            unifiedHighlightRanges = []
+	            selectedNSRange = nil
+	            return
+	        }
+
+        let matches = SearchTextMatcher.matchRanges(in: transcript, query: q)
+        if matches.isEmpty {
+            unifiedCurrentMatchIndex = 0
+            unifiedHighlightRanges = []
+            unifiedMatches = []
+        } else {
+            if resetIndex {
+                unifiedCurrentMatchIndex = 0
+            } else {
+                var newIdx = unifiedCurrentMatchIndex + direction
+                if newIdx < 0 { newIdx = matches.count - 1 }
+                if newIdx >= matches.count { newIdx = 0 }
+                unifiedCurrentMatchIndex = newIdx
+            }
+
+            // Convert to NSRange and validate bounds
+            let transcriptLength = (transcript as NSString).length
+            let validRanges = matches.filter { nsRange in
+                if NSMaxRange(nsRange) <= transcriptLength {
+                    return true
+                }
+                print("⚠️ FIND: Skipping out-of-bounds range \(nsRange) (transcript length: \(transcriptLength))")
+                return false
+            }
+
+            if validRanges.count != matches.count {
+                print("⚠️ FIND: Filtered \(matches.count - validRanges.count) out-of-bounds ranges (query: '\(q)', transcript: \(transcriptLength) chars)")
+            }
+
+            unifiedMatches = validRanges
+            unifiedHighlightRanges = validRanges
+
+            // Adjust unifiedCurrentMatchIndex if out of bounds after filtering
+            if unifiedHighlightRanges.isEmpty {
+                unifiedCurrentMatchIndex = 0
+            } else if unifiedCurrentMatchIndex >= unifiedHighlightRanges.count {
+                unifiedCurrentMatchIndex = unifiedHighlightRanges.count - 1
+            }
+            if shouldJump {
+                updateSelectionToUnifiedCurrentMatch()
+            } else {
+                selectedNSRange = nil
+            }
+        }
+    }
+
+    private func performFind(resetIndex: Bool, direction: Int = 1, shouldJump: Bool = true) {
+        // Terminal mode uses a dedicated line-based search in SessionTerminalView.
+        if viewMode == .terminal {
+            let q = findQuery
+            guard !q.isEmpty else {
+                terminalFindMatchesCount = 0
+                terminalFindTotalMatchesCount = 0
+                terminalFindCurrentIndex = 0
+                terminalAllowMatchAutoScroll = false
+                terminalFindToken &+= 1
+                findCurrentRange = nil
+                return
+            }
+            terminalAllowMatchAutoScroll = shouldJump
+            terminalFindDirection = direction
+            terminalFindResetFlag = resetIndex
+            terminalFindToken &+= 1
+            return
+        }
+
+        let q = findQuery
+        guard !q.isEmpty else {
+            findMatches = []
+            findCurrentMatchIndex = 0
+            findCurrentRange = nil
+            selectedNSRange = nil
+            return
+        }
+
+        var matches: [Range<String.Index>] = []
+        var searchStart = transcript.startIndex
+        while let r = transcript.range(of: q, options: [.caseInsensitive], range: searchStart..<transcript.endIndex) {
+            matches.append(r)
+            searchStart = r.upperBound
+        }
+        findMatches = matches
+
+        if matches.isEmpty {
+            findCurrentMatchIndex = 0
+            findCurrentRange = nil
+            selectedNSRange = nil
+            return
+        }
+
+        if resetIndex {
+            findCurrentMatchIndex = 0
+        } else {
+            var newIdx = findCurrentMatchIndex + direction
+            if newIdx < 0 { newIdx = matches.count - 1 }
+            if newIdx >= matches.count { newIdx = 0 }
+            findCurrentMatchIndex = newIdx
+        }
+
+        // Clamp and convert to NSRange
+        let clampedIdx = min(max(0, findCurrentMatchIndex), matches.count - 1)
+        findCurrentMatchIndex = clampedIdx
+        let nsRange = NSRange(matches[clampedIdx], in: transcript)
+        findCurrentRange = nsRange
+        if shouldJump {
+            selectionScrollMode = .ensureVisible
+            selectedNSRange = nsRange
+        }
+    }
+
+    private func updateSelectionToUnifiedCurrentMatch() {
+        guard !unifiedHighlightRanges.isEmpty, unifiedCurrentMatchIndex < unifiedHighlightRanges.count else {
+            selectedNSRange = nil
+            return
+        }
+        selectionScrollMode = .ensureVisible
+        selectedNSRange = unifiedHighlightRanges[unifiedCurrentMatchIndex]
+    }
+
+    private func unifiedStatus() -> String {
+        guard isUnifiedSearchActive else { return "" }
+        if viewMode == .terminal {
+            return terminalStatus(currentIndex: terminalUnifiedCurrentIndex,
+                                  visible: terminalUnifiedMatchesCount,
+                                  total: terminalUnifiedTotalMatchesCount)
+        }
+        let total = unifiedMatches.count
+        if total == 0 { return "0/0" }
+        return "\(unifiedCurrentMatchIndex + 1)/\(total)"
+    }
+
+    private func findStatus() -> String {
+        guard !findQuery.isEmpty else { return "" }
+        if viewMode == .terminal {
+            return terminalStatus(currentIndex: terminalFindCurrentIndex,
+                                  visible: terminalFindMatchesCount,
+                                  total: terminalFindTotalMatchesCount)
+        }
+        let total = findMatches.count
+        if total == 0 { return "0/0" }
+        return "\(findCurrentMatchIndex + 1)/\(total)"
+    }
+
+    private func terminalStatus(currentIndex: Int, visible: Int, total: Int) -> String {
+        if visible == 0 {
+            return total == 0 ? "0/0" : "0/0 (\(total))"
+        }
+        if total == visible {
+            return "\(currentIndex + 1)/\(visible)"
+        }
+        return "\(currentIndex + 1)/\(visible) (\(total))"
+    }
+
+    private var isUnifiedNavigationDisabled: Bool {
+        if viewMode == .terminal {
+            return terminalUnifiedMatchesCount == 0 || unifiedFreeText.isEmpty
+        }
+        return unifiedMatches.isEmpty || unifiedFreeText.isEmpty
+    }
+
+    private var isFindNavigationDisabled: Bool {
+        if viewMode == .terminal {
+            return terminalFindMatchesCount == 0 || findQuery.isEmpty
+        }
+        return findMatches.isEmpty || findQuery.isEmpty
+    }
+
+    private func adjustFont(_ delta: Int) {
+        let newSize = transcriptFontSize + Double(delta)
+        transcriptFontSize = max(8, min(32, newSize))
+    }
+
+    private func copyAll() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(transcript, forType: .string)
+    }
+
+    private func exportMarkdown(session: Session) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = markdownFilename(for: session)
+
+        guard let window = NSApp.keyWindow else { return }
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            let header = "# \(session.listTitle)\n\n"
+            let content = header + transcript
+            try? content.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func markdownFilename(for session: Session) -> String {
+        let title = session.listTitle
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .prefix(60)
+        let date = (session.startTime ?? Date()).formatted(.iso8601.year().month().day())
+        return "\(title) \(date).md"
+    }
+
+	    private func clearSearch() {
+	        searchState.query = ""
+	    }
+
+	    private func closeFind() {
+	        isFindFieldFocused = false
+	        isFindBarVisible = false
+	        findQueryDraft = ""
+	        findMatches = []
+	        findCurrentMatchIndex = 0
+	        findCurrentRange = nil
+	        focusCoordinator.perform(.closeAllSearch)
+	    }
+
+    private func handleFindFieldEscape() {
+        let trimmed = findQueryDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            closeFind()
+            return
+        }
+        findQueryDraft = ""
+        performFind(resetIndex: true, shouldJump: false)
+    }
+
+	    private func navigateNextMatch(direction: Int) {
+	        if isFindBarVisible, !findQuery.isEmpty {
+	            performFind(resetIndex: false, direction: direction, shouldJump: true)
+	            return
+	        }
+	        guard !unifiedQuery.isEmpty else { return }
+	        performUnifiedFind(resetIndex: false, direction: direction, shouldJump: true)
+	    }
+
+    private func applyAutoJumpIfReady(session: Session) {
+        guard let pending = pendingAutoJumpToken, pending > lastHandledAutoJumpToken else { return }
+        guard isUnifiedSearchActive, sessionID == session.id else { return }
+        guard pendingAutoJumpSessionID == session.id else { return }
+        guard isTranscriptReady(for: session) else { return }
+        performUnifiedFind(resetIndex: true, shouldJump: true)
+        lastHandledAutoJumpToken = pending
+        pendingAutoJumpToken = nil
+        pendingAutoJumpSessionID = nil
+    }
+
+    private func isTranscriptReady(for session: Session) -> Bool {
+        guard let key = lastBuildKey else { return false }
+        return key.hasPrefix("\(session.id)|")
+    }
+
+    private func extractShortID(for session: Session) -> String? {
+        if let full = sessionIDExtractor(session) {
+            return String(full.prefix(6))
+        }
+        return nil
+    }
+
+    private func copySessionID(for session: Session) {
+        guard let id = sessionIDExtractor(session) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(id, forType: .string)
+        showIDCopiedPopover = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { showIDCopiedPopover = false }
+    }
+
+    // Terminal mode additional colorization
+    private func findAdditionalRanges() {
+        let text = transcript
+        var asst: [NSRange] = []
+        var out: [NSRange] = []
+        var err: [NSRange] = []
+
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var pos = 0
+        for line in lines {
+            let len = line.utf16.count
+            let lineStr = String(line)
+            // Assistant markers: prefer ASCII, fall back to legacy glyph variant
+            if lineStr.hasPrefix("[assistant] ") || lineStr.hasPrefix("assistant ∎ ") {
+                let r = NSRange(location: pos, length: len)
+                asst.append(r)
+            // Output markers: prefer ASCII, also match legacy glyph and pipe-prefixed blocks
+            } else if lineStr.hasPrefix("[out] ") || lineStr.hasPrefix("output ≡ ") || lineStr.hasPrefix("  | ") || lineStr.hasPrefix("⟪out⟫ ") {
+                let r = NSRange(location: pos, length: len)
+                out.append(r)
+            // Error markers: prefer ASCII, fall back to legacy glyph variant
+            } else if lineStr.hasPrefix("[error] ") || lineStr.hasPrefix("error ⚠ ") || lineStr.hasPrefix("! error ") {
+                let r = NSRange(location: pos, length: len)
+                err.append(r)
+            }
+            pos += len + 1
+        }
+        assistantRanges = asst
+        outputRanges = out
+        errorRanges = err
+    }
+
+    private func resetJumpCursors() {
+        lastUserJumpLocation = nil
+        lastToolsJumpLocation = nil
+        lastErrorJumpLocation = nil
+    }
+
+    private func computeNavigationRangesIfNeeded() {
+        guard viewMode != .terminal else { return }
+        guard viewMode != .json else { return }
+
+        // Build navigable ranges by scanning the transcript's stable prefixes. These ranges
+        // are used for keyboard navigation, not styling (Plain view does not colorize).
+        let text = transcript
+        var users: [NSRange] = []
+        var tools: [NSRange] = []
+        var outs: [NSRange] = []
+        var errs: [NSRange] = []
+
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var pos = 0
+        for line in lines {
+            let len = line.utf16.count
+            let range = NSRange(location: pos, length: max(1, len))
+
+            let stripped = stripTimestampPrefixIfPresent(line)
+            if stripped.hasPrefix(SessionTranscriptBuilder.userPrefix) {
+                users.append(range)
+            } else if stripped.hasPrefix(SessionTranscriptBuilder.toolPrefix) {
+                tools.append(range)
+            } else if stripped.hasPrefix(SessionTranscriptBuilder.outPrefix) {
+                outs.append(range)
+            } else if stripped.hasPrefix(SessionTranscriptBuilder.errorPrefix) {
+                errs.append(range)
+            }
+
+            pos += len + 1
+        }
+
+        userRanges = users
+        commandRanges = tools
+        outputRanges = outs
+        errorRanges = errs
+    }
+
+    private func stripTimestampPrefixIfPresent(_ line: Substring) -> Substring {
+        guard showTimestamps else { return line }
+        // Timestamp prefix uses a stable separator to avoid locale-dependent length assumptions.
+        // Example: "1:23:45 PM • > Hello"
+        let probe = line.prefix(40)
+        guard let range = probe.range(of: AppDateFormatting.transcriptSeparator) else { return line }
+        return line[range.upperBound...]
+    }
+
+    private enum JumpKind { case user, tools, errors }
+
+    private func jumpUser(direction: Int) {
+        // Some SwiftUI toolchains treat Shift as an "extra" modifier for arrow shortcuts.
+        // If the user presses ⌥⌘⇧↑/↓, make sure it routes to Errors navigation.
+        if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            jumpErrors(direction: direction)
+            return
+        }
+        if viewMode == .terminal {
+            terminalRoleNavRole = .user
+            terminalRoleNavDirection = direction
+            terminalRoleNavToken &+= 1
+            return
+        }
+        guard viewMode != .json else { return }
+        jumpInPlain(kind: .user, direction: direction)
+    }
+
+    private func jumpTools(direction: Int) {
+        if viewMode == .terminal {
+            terminalRoleNavRole = .tools
+            terminalRoleNavDirection = direction
+            terminalRoleNavToken &+= 1
+            return
+        }
+        guard viewMode != .json else { return }
+        jumpInPlain(kind: .tools, direction: direction)
+    }
+
+    private func jumpErrors(direction: Int) {
+        if viewMode == .terminal {
+            terminalRoleNavRole = .errors
+            terminalRoleNavDirection = direction
+            terminalRoleNavToken &+= 1
+            return
+        }
+        guard viewMode != .json else { return }
+        jumpInPlain(kind: .errors, direction: direction)
+    }
+
+    private func jumpInPlain(kind: JumpKind, direction: Int) {
+        computeNavigationRangesIfNeeded()
+
+        let list: [NSRange] = {
+            switch kind {
+            case .user:
+                return userRanges
+            case .tools:
+                return commandRanges + outputRanges
+            case .errors:
+                return errorRanges
+            }
+        }()
+
+        let ranges = list
+            .filter { $0.location >= 0 && $0.length > 0 }
+            .sorted { $0.location < $1.location }
+        guard !ranges.isEmpty else { return }
+
+        let cursor: Int? = {
+            switch kind {
+            case .user: return lastUserJumpLocation
+            case .tools: return lastToolsJumpLocation
+            case .errors: return lastErrorJumpLocation
+            }
+        }()
+
+        let next: NSRange = {
+            if direction >= 0 {
+                let start = cursor ?? -1
+                if let found = ranges.first(where: { $0.location > start }) { return found }
+                return ranges.first!
+            } else {
+                let start = cursor ?? Int.max
+                if let found = ranges.last(where: { $0.location < start }) { return found }
+                return ranges.last!
+            }
+        }()
+
+        switch kind {
+        case .user: lastUserJumpLocation = next.location
+        case .tools: lastToolsJumpLocation = next.location
+        case .errors: lastErrorJumpLocation = next.location
+        }
+
+        selectionScrollMode = .alignTop
+        selectedNSRange = next
+    }
+
+    private func firstConversationAnchor(in s: Session) -> String? {
+        for ev in s.events.prefix(5000) {
+            if ev.kind == .assistant, let t = ev.text, !t.isEmpty {
+                let clean = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                if clean.count >= 10 {
+                    return String(clean.prefix(60))
+                }
+            }
+        }
+        return nil
+    }
+
+    private func firstConversationRangeInTranscript(text: String) -> NSRange? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var pos = 0
+        for line in lines {
+            let len = line.utf16.count
+            if String(line).hasPrefix("assistant ∎ ") {
+                return NSRange(location: pos, length: len)
+            }
+            pos += len + 1
+        }
+        return nil
+    }
+
+    private func scheduleJSONBuild(session: Session,
+                                   key: String,
+                                   shouldCache: Bool,
+                                   hasCommands: Bool,
+                                   renderedViewMode: SessionViewMode,
+                                   renderedAppendConfigKey: String? = nil,
+                                   cachedText: String? = nil,
+                                   generation: Int) {
+        let prio: TaskPriority = FeatureFlags.lowerQoSForHeavyWork ? .utility : .userInitiated
+        jsonBuildTask?.cancel()
+        let sessionSnapshot = session
+        isBuildingJSON = true
+        jsonBuildTask = Task.detached(priority: prio) {
+            defer {
+                Task { @MainActor in
+                    guard self.canApplyRender(sessionID: sessionSnapshot.id, generation: generation) else { return }
+                    self.isBuildingJSON = false
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let pretty = cachedText ?? prettyJSONForSession(sessionSnapshot)
+            let (keyRanges, stringRanges, numberRanges, keywordRanges) = jsonSyntaxHighlightRanges(for: pretty)
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                guard self.canApplyRender(sessionID: sessionSnapshot.id, generation: generation) else { return }
+                self.setRenderedTranscript(pretty,
+                                           session: sessionSnapshot,
+                                           renderedViewMode: renderedViewMode,
+                                           appendConfigKey: renderedAppendConfigKey)
+                self.commandRanges = keyRanges
+                self.userRanges = stringRanges
+                self.assistantRanges = keywordRanges
+                self.outputRanges = numberRanges
+                self.errorRanges = []
+                self.hasCommands = hasCommands
+                if shouldCache {
+                    self.transcriptCache[key] = pretty
+                }
+                self.lastBuildKey = key
+                self.performUnifiedFind(resetIndex: true, shouldJump: false)
+                self.selectedNSRange = nil
+                self.applyAutoJumpIfReady(session: sessionSnapshot)
+            }
+        }
+    }
+
+    // MARK: - Agents.md preamble jump + divider (no trimming)
+
+    private func skipAgentsPreambleEnabled() -> Bool {
+        let d = UserDefaults.standard
+        let key = PreferencesKey.Unified.skipAgentsPreamble
+        if d.object(forKey: key) == nil { return true }
+        return d.bool(forKey: key)
+    }
+
+    @ViewBuilder
+    private func pinnedBadge(session: Session) -> some View {
+        let info = archiveManager.info(source: session.source, id: session.id)
+        let pinsEnabled = UserDefaults.standard.object(forKey: PreferencesKey.Archives.starPinsSessions) as? Bool ?? true
+        let statusText: String = {
+            // Keep the badge lean: "Saved" is the only label; details live in the tooltip.
+            if !pinsEnabled { return "Saved" }
+            guard let info else { return "Saved" }
+            if info.upstreamMissing { return "Saved" }
+            switch info.status {
+            case .none, .staging, .syncing, .final, .error:
+                return "Saved"
+            }
+        }()
+
+        Text(statusText)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+            )
+            .help(pinnedHelpText(info: info))
+    }
+
+    private func pinnedHelpText(info: SessionArchiveInfo?) -> String {
+        let pinsEnabled = UserDefaults.standard.object(forKey: PreferencesKey.Archives.starPinsSessions) as? Bool ?? true
+        guard pinsEnabled else { return "Saved session. Archiving is disabled in Settings." }
+        guard let info else { return "Archive pending." }
+        var parts: [String] = []
+        if let last = info.lastSyncAt {
+            let r = RelativeDateTimeFormatter()
+            r.unitsStyle = .short
+            parts.append("Last sync: \(r.localizedString(for: last, relativeTo: Date()))")
+        } else {
+            parts.append("Not yet synced")
+        }
+        if let bytes = info.archiveSizeBytes, bytes > 0 {
+            parts.append("Archive size: \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+        }
+        if info.upstreamMissing {
+            parts.append("Upstream missing — archived copy only")
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private func shouldShowJumpToFirstPrompt(session: Session) -> Bool {
+        guard skipAgentsPreambleEnabled() else { return false }
+        if session.events.contains(where: { ($0.text?.contains("</INSTRUCTIONS>") ?? false) }) { return true }
+        if session.source == .claude {
+            let anchor = "caveat: the messages below were generated by the user while running local commands"
+            return session.events.contains(where: { $0.kind == .user && ($0.text?.lowercased().contains(anchor) ?? false) })
+        }
+        if session.source == .droid {
+            return session.events.contains(where: { $0.kind == .user && ($0.text.map { Session.isAgentsPreambleText($0) } ?? false) })
+        }
+        return false
+    }
+
+    private func jumpToFirstPrompt(session: Session) {
+        if viewMode == .terminal {
+            terminalJumpToken &+= 1
+            return
+        }
+        let r: NSRange?
+        if session.source == .codex {
+            r = conversationStartRangeForJump(text: transcript)
+        } else if session.source == .claude {
+            r = claudeConversationStartRangeForJump(text: transcript, session: session)
+        } else if session.source == .droid {
+            r = droidConversationStartRangeForJump(text: transcript, session: session)
+        } else {
+            r = conversationStartRangeForJump(text: transcript)
+        }
+        guard let r else { return }
+        selectionScrollMode = .alignTop
+        selectedNSRange = r
+    }
+
+	    private func maybeAutoJumpToFirstPrompt(session: Session) {
+	        guard skipAgentsPreambleEnabled() else { return }
+	        guard unifiedQuery.isEmpty else { return }
+	        guard findQuery.isEmpty else { return }
+	        guard selectedNSRange == nil else { return }
+
+        // Terminal view handles its own jump via SessionTerminalView.
+        if viewMode == .terminal { return }
+
+        if session.source == .codex, let r = conversationStartRangeForJump(text: transcript) {
+            selectionScrollMode = .alignTop
+            selectedNSRange = r
+            return
+        }
+
+        if session.source == .claude, let r = claudeConversationStartRangeForJump(text: transcript, session: session) {
+            selectionScrollMode = .alignTop
+            selectedNSRange = r
+            return
+        }
+
+        if session.source == .droid, let r = droidConversationStartRangeForJump(text: transcript, session: session) {
+            selectionScrollMode = .alignTop
+            selectedNSRange = r
+            return
+        }
+    }
+
+    private func droidConversationStartRangeForJump(text: String, session: Session) -> NSRange? {
+        let hasPreamble = session.events.contains(where: { $0.kind == .user && ($0.text.map { Session.isAgentsPreambleText($0) } ?? false) })
+        guard hasPreamble else { return nil }
+
+        let divider = "──────── Conversation starts here"
+        if let div = text.range(of: divider) {
+            let start = div.lowerBound
+            let end = text.index(after: start)
+            return NSRange(start..<end, in: text)
+        }
+        return nil
+    }
+
+    private func claudeConversationStartRangeForJump(text: String, session: Session) -> NSRange? {
+        // Only do Claude auto-jump when the local-command caveat preamble is present somewhere.
+        let anchor = "caveat: the messages below were generated by the user while running local commands"
+        let hasCaveat = session.events.contains(where: { $0.kind == .user && ($0.text?.lowercased().contains(anchor) ?? false) })
+        guard hasCaveat else { return nil }
+
+        // Prefer scrolling to the divider line itself so it lands as the top visible line.
+        let divider = "──────── Conversation starts here"
+        if let div = text.range(of: divider) {
+            let start = div.lowerBound
+            let end = text.index(after: start)
+            return NSRange(start..<end, in: text)
+        }
+
+        for ev in session.events where ev.kind == .user {
+            guard let raw = ev.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { continue }
+            let lower = raw.lowercased()
+
+            // If this is the caveat transcript block, try to jump to its extracted prompt tail.
+            if lower.contains(anchor) {
+                if let tail = Session.claudeLocalCommandPromptTail(from: raw),
+                   let range = text.range(of: tail, options: []) {
+                    // Jump to start-of-line to avoid leaving partial caveat text visible above.
+                    var start = range.lowerBound
+                    while start > text.startIndex {
+                        let prev = text.index(before: start)
+                        if text[prev] == "\n" { break }
+                        start = prev
+                    }
+                    return NSRange(start..<text.index(after: start), in: text)
+                }
+                // Pure command transcript: skip this user event and continue to the next.
+                continue
+            }
+
+            // Otherwise, jump to the first subsequent user prompt.
+            if let range = text.range(of: raw, options: []) {
+                var start = range.lowerBound
+                while start > text.startIndex {
+                    let prev = text.index(before: start)
+                    if text[prev] == "\n" { break }
+                    start = prev
+                }
+                return NSRange(start..<text.index(after: start), in: text)
+            }
+        }
+
+        return nil
+    }
+
+    private func decorateTranscriptIfNeeded(_ raw: String, session: Session) -> String {
+        guard skipAgentsPreambleEnabled() else { return raw }
+        guard viewMode != .json else { return raw }
+        return insertingConversationStartDividerIfNeeded(in: raw, session: session)
+    }
+
+    private func insertingConversationStartDividerIfNeeded(in text: String, session: Session) -> String {
+        // Avoid double-insertion.
+        if text.contains("──────── Conversation starts here") { return text }
+
+        if session.source == .codex {
+            let marker = "</INSTRUCTIONS>"
+            guard let markerRange = text.range(of: marker) else { return text }
+
+            // Insert divider immediately above the first non-empty line after </INSTRUCTIONS>.
+            var idx = markerRange.upperBound
+            while idx < text.endIndex {
+                let ch = text[idx]
+                if ch == "\n" || ch == "\r" || ch == " " || ch == "\t" {
+                    idx = text.index(after: idx)
+                    continue
+                }
+                break
+            }
+            guard idx < text.endIndex else { return text }
+
+            let dividerLine = "──────── Conversation starts here ────────\n"
+            var out = text
+            out.insert(contentsOf: dividerLine, at: idx)
+            return out
+        }
+
+        if session.source == .claude {
+            // Claude Code: insert divider above the first real user prompt after the local-command caveat transcript.
+            let anchor = "caveat: the messages below were generated by the user while running local commands"
+            let hasCaveat = session.events.contains(where: { $0.kind == .user && ($0.text?.lowercased().contains(anchor) ?? false) })
+            guard hasCaveat else { return text }
+
+            func lineStartIndex(for needle: String) -> String.Index? {
+                guard let r = text.range(of: needle) else { return nil }
+                var start = r.lowerBound
+                while start > text.startIndex {
+                    let prev = text.index(before: start)
+                    if text[prev] == "\n" { break }
+                    start = prev
+                }
+                return start
+            }
+
+            // Prefer: prompt tail extracted from the caveat-containing user event.
+            for ev in session.events where ev.kind == .user {
+                guard let raw = ev.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { continue }
+                if raw.lowercased().contains(anchor) {
+                    if let tail = Session.claudeLocalCommandPromptTail(from: raw),
+                       let idx = lineStartIndex(for: tail) {
+                        let dividerLine = "──────── Conversation starts here ────────\n"
+                        var out = text
+                        out.insert(contentsOf: dividerLine, at: idx)
+                        return out
+                    }
+                    break
+                }
+            }
+
+            // Fallback: first user line that isn't a caveat/transcript fragment.
+            for ev in session.events where ev.kind == .user {
+                guard let raw = ev.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { continue }
+                let lower = raw.lowercased()
+                if lower.contains(anchor) { continue }
+                if Session.isAgentsPreambleText(raw) { continue }
+                if let idx = lineStartIndex(for: raw) {
+                    let dividerLine = "──────── Conversation starts here ────────\n"
+                    var out = text
+                    out.insert(contentsOf: dividerLine, at: idx)
+                    return out
+                }
+            }
+        }
+
+        if session.source == .droid {
+            func lineStartIndex(for needle: String) -> String.Index? {
+                guard let r = text.range(of: needle) else { return nil }
+                var start = r.lowerBound
+                while start > text.startIndex {
+                    let prev = text.index(before: start)
+                    if text[prev] == "\n" { break }
+                    start = prev
+                }
+                return start
+            }
+
+            var sawPreamble = false
+            for ev in session.events where ev.kind == .user {
+                guard let raw = ev.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { continue }
+                if Session.isAgentsPreambleText(raw) {
+                    sawPreamble = true
+                    continue
+                }
+                guard sawPreamble else { break }
+                if let idx = lineStartIndex(for: raw) {
+                    let dividerLine = "──────── Conversation starts here ────────\n"
+                    var out = text
+                    out.insert(contentsOf: dividerLine, at: idx)
+                    return out
+                }
+            }
+        }
+
+        return text
+    }
+
+    private func conversationStartRangeForJump(text: String) -> NSRange? {
+        let marker = "</INSTRUCTIONS>"
+        guard let markerRange = text.range(of: marker) else { return nil }
+        // Prefer scrolling to the divider line itself so it lands as the top visible line.
+        let divider = "──────── Conversation starts here"
+        let suffix = text[markerRange.upperBound...]
+        if let div = suffix.range(of: divider) {
+            let start = div.lowerBound
+            let end = text.index(after: start)
+            return NSRange(start..<end, in: text)
+        }
+
+        // Fallback: first non-whitespace character after the marker.
+        var idx = markerRange.upperBound
+        while idx < text.endIndex {
+            let ch = text[idx]
+            if ch == "\n" || ch == "\r" || ch == " " || ch == "\t" {
+                idx = text.index(after: idx)
+                continue
+            }
+            break
+        }
+        guard idx < text.endIndex else { return nil }
+        return NSRange(idx..<text.index(after: idx), in: text)
+    }
+}
+
+private enum SelectionScrollMode {
+    case ensureVisible
+    case alignTop
+}
+
+// Build a single pretty-printed JSON array for the entire session.
+private func prettyJSONForSession(_ session: Session) -> String {
+    guard !session.events.isEmpty else { return "[]" }
+
+    // Hard cap on JSON size for pretty-printing to avoid UI stalls.
+    // We keep the total under ~300k UTF-16 units, then append a synthetic
+    // sentinel object if we had to truncate.
+    var pieces: [String] = []
+    var remainingBudget = 300_000
+    var omittedCount = 0
+
+    for (idx, e) in session.events.enumerated() {
+        let rawPayload = jsonPayload(for: e)
+        let payload = transformJSONForViewer(rawPayload)
+        let cost = payload.utf16.count + 2 // comma/newline overhead
+        if cost <= remainingBudget {
+            pieces.append(payload)
+            remainingBudget -= cost
+        } else {
+            // If a single event is too large, do not discard the rest of the session.
+            // Emit a compact stub marker for this event and continue if it fits.
+            let originalChars = rawPayload.utf16.count
+            let stub = #"{"type":"omitted","text":"[Large JSON event truncated - \#(originalChars) chars]","event_index":\#(idx)}"#
+            let stubCost = stub.utf16.count + 2
+            if stubCost <= remainingBudget {
+                pieces.append(stub)
+                remainingBudget -= stubCost
+                continue
+            }
+
+            omittedCount = session.events.count - idx
+            break
+        }
+    }
+
+    if omittedCount > 0 {
+        let marker = #"{"type":"omitted","text":"[JSON view truncated - \#(omittedCount) events omitted]"}"#
+        pieces.append(marker)
+    }
+
+    let joined = "[" + pieces.joined(separator: ",") + "]"
+    return PrettyJSON.prettyPrinted(joined)
+}
+
+// Decode per-event rawJSON; handles plain JSON and base64-wrapped JSON.
+private func jsonPayload(for event: SessionEvent) -> String {
+    let raw = event.rawJSON
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return trimmed }
+    if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
+        return trimmed
+    }
+    if let data = Data(base64Encoded: trimmed),
+       let decoded = String(data: data, encoding: .utf8) {
+        return decoded
+    }
+    return trimmed
+}
+
+/// Transform per-event JSON for the viewer:
+/// - Replace large opaque `encrypted_content` blobs with a compact stub object.
+/// - Expand `content[].text` blocks into structured text stubs for readability.
+///
+/// - Note: This only affects the JSON *presentation* in the viewer. The underlying
+///   `SessionEvent.rawJSON` remains unchanged on disk.
+private func transformJSONForViewer(_ json: String) -> String {
+    // Fast path: only bother parsing when we see fields we care about or the
+    // payload is large enough that we may want to stub huge strings for UI safety.
+    let isLargePayload = json.utf16.count > 60_000
+    guard isLargePayload
+        || json.contains(#""encrypted_content""#)
+        || json.contains(#""content""#)
+        || json.contains(#""resultDisplay""#)
+        || json.contains(#""stdout""#)
+        || json.contains(#""stderr""#)
+        || json.contains(#""url""#)
+    else {
+        return json
+    }
+    guard let data = json.data(using: .utf8) else { return json }
+
+    do {
+        let object = try JSONSerialization.jsonObject(with: data, options: [])
+        let transformed = transformJSONValue(object)
+        let transformedData = try JSONSerialization.data(withJSONObject: transformed, options: [])
+        return String(data: transformedData, encoding: .utf8) ?? json
+    } catch {
+        return json
+    }
+}
+
+/// Recursively walk the JSON structure and:
+/// - Replace any `"encrypted_content": "<blob>"` string with a descriptor object.
+/// - Replace `content[].text` blocks (input/output text) with structured text stubs.
+private func transformJSONValue(_ value: Any) -> Any {
+    if let string = value as? String {
+        if string.utf16.count > 40_000 {
+            return makeLargeStringStub(from: string)
+        }
+        return string
+    }
+
+    if let array = value as? [Any] {
+        return array.map { transformJSONValue($0) }
+    }
+
+    guard let dict = value as? [String: Any] else {
+        return value
+    }
+
+    var updated: [String: Any] = [:]
+    for (key, rawValue) in dict {
+        if key == "encrypted_content", let blob = rawValue as? String {
+            updated[key] = makeEncryptedContentStub(from: blob, in: dict)
+        } else if key == "resultDisplay",
+                  let text = rawValue as? String,
+                  text.count > 200,
+                  text.contains("\n") {
+            updated[key] = makeTextBlockStub(from: text)
+        } else if key == "stdout",
+                  let text = rawValue as? String,
+                  text.count > 200,
+                  text.contains("\n") {
+            updated[key] = makeTextBlockStub(from: text)
+        } else if key == "stderr",
+                  let text = rawValue as? String,
+                  text.count > 200,
+                  text.contains("\n") {
+            updated[key] = makeTextBlockStub(from: text)
+        } else if key == "text",
+                  let text = rawValue as? String,
+                  shouldConvertTextBlock(in: dict) {
+            updated[key] = makeTextBlockStub(from: text)
+        } else if key == "output",
+                  let text = rawValue as? String,
+                  shouldConvertOutputBlock(text: text, in: dict) {
+            updated[key] = makeTextBlockStub(from: text)
+        } else if key == "url",
+                  let url = rawValue as? String,
+                  shouldRedactDataURL(url, in: dict) {
+            updated[key] = makeDataURLStub(from: url, in: dict)
+        } else {
+            updated[key] = transformJSONValue(rawValue)
+        }
+    }
+    return updated
+}
+
+/// Build a small, JSON-serializable descriptor for an encrypted blob.
+/// We assume `encrypted_content` is base64-encoded, so we can approximate byte size.
+private func makeEncryptedContentStub(from base64: String, in container: [String: Any]) -> [String: Any] {
+    let length = base64.count
+    let approxBytes = approximateBase64Bytes(forLength: length, string: base64)
+    let approxKB = (Double(approxBytes) / 1024.0 * 10.0).rounded() / 10.0
+
+    var stub: [String: Any] = [
+        "_kind": "encrypted_blob",
+        "encoding": "base64",
+        "bytes": approxBytes,
+        "approx_kb": approxKB
+    ]
+
+    if let contentType = container["content_type"] as? String {
+        stub["content_type"] = contentType
+    } else if let mimeType = container["mime_type"] as? String {
+        stub["content_type"] = mimeType
+    }
+
+    return stub
+}
+
+/// Decide whether a `"text"` field should be promoted to a structured text block
+/// for readability in the viewer. We currently focus on content parts like:
+///   { "type": "input_text", "text": "..." }
+private func shouldConvertTextBlock(in container: [String: Any]) -> Bool {
+    guard let type = container["type"] as? String else { return false }
+    switch type {
+    case "input_text", "output_text":
+        return true
+    default:
+        return false
+    }
+}
+
+/// Decide whether an `"output"` string should be promoted to a structured text block.
+/// This is mainly for large tool outputs (e.g., Gemini ReadFile responses) so that
+/// multi-line content becomes readable.
+private func shouldConvertOutputBlock(text: String, in container: [String: Any]) -> Bool {
+    // Only consider reasonably large, multi-line strings.
+    guard text.count > 200 else { return false }
+    guard text.contains("\n") else { return false }
+
+    // Avoid touching numeric-style outputs; these are almost always human text blobs.
+    if let _ = container["output_tokens"] as? NSNumber {
+        return false
+    }
+    return true
+}
+
+/// Decide whether a `url` string is an inline data: URL that should be summarized
+/// to avoid rendering a huge base64 blob (e.g., embedded images).
+private func shouldRedactDataURL(_ url: String, in container: [String: Any]) -> Bool {
+    guard url.count > 100 else { return false }
+    guard url.hasPrefix("data:") else { return false }
+    guard url.contains(";base64,") else { return false }
+    return true
+}
+
+/// Build a small descriptor for an inline data URL (typically an image) so the JSON
+/// view shows media type and size instead of the full base64 string.
+private func makeDataURLStub(from url: String, in container: [String: Any]) -> [String: Any] {
+    // data:<mediaType>;base64,<payload>
+    let prefix = "data:"
+    guard url.hasPrefix(prefix),
+          let semicolon = url.firstIndex(of: ";"),
+          let comma = url.firstIndex(of: ","),
+          semicolon < comma
+    else {
+        return [
+            "_kind": "data_url_blob",
+            "length": url.count
+        ]
+    }
+
+    let mediaStart = url.index(url.startIndex, offsetBy: prefix.count)
+    let mediaType = String(url[mediaStart..<semicolon])
+    let base64Start = url.index(after: comma)
+    let base64Payload = String(url[base64Start...])
+    let approxBytes = approximateBase64Bytes(forLength: base64Payload.count, string: base64Payload)
+    let approxKB = (Double(approxBytes) / 1024.0 * 10.0).rounded() / 10.0
+
+    var stub: [String: Any] = [
+        "_kind": "data_url_blob",
+        "media_type": mediaType,
+        "encoding": "base64",
+        "bytes": approxBytes,
+        "approx_kb": approxKB
+    ]
+
+    if let role = container["type"] as? String {
+        stub["context_type"] = role
+    }
+
+    return stub
+}
+
+/// Build a structured representation for large text blocks so that the JSON view
+/// shows them as readable paragraphs instead of a single escaped blob.
+private func makeTextBlockStub(from text: String) -> [String: Any] {
+    let length = text.utf16.count
+
+    // Avoid exploding very large text (e.g., "ls -R" tool output) into thousands of JSON
+    // array items. Keep a preview for readability while keeping the JSON view responsive.
+    if length > 80_000 {
+        let previewLineLimit = 200
+        let preview = text.split(
+            separator: "\n",
+            maxSplits: previewLineLimit - 1,
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        let newlineCount = text.utf8.reduce(0) { partial, byte in
+            partial + (byte == 10 ? 1 : 0)
+        }
+        let lineCount = newlineCount + 1
+        return [
+            "_kind": "text_block",
+            "preview_lines": preview,
+            "preview_line_count": preview.count,
+            "line_count": lineCount,
+            "chars": length,
+            "truncated": true
+        ]
+    }
+
+    let lines = text.components(separatedBy: .newlines)
+    return [
+        "_kind": "text_block",
+        "lines": lines,
+        "line_count": lines.count,
+        "chars": length
+    ]
+}
+
+private func makeLargeStringStub(from text: String) -> [String: Any] {
+    let length = text.utf16.count
+    let previewLimit = 2_000
+    let preview = String(text.prefix(previewLimit))
+    return [
+        "_kind": "string_preview",
+        "chars": length,
+        "preview_chars": preview.utf16.count,
+        "preview": preview,
+        "truncated": true
+    ]
+}
+
+/// Approximate decoded bytes for a Base64 string based on its length and padding.
+private func approximateBase64Bytes(forLength length: Int, string: String) -> Int {
+    guard length > 0 else { return 0 }
+    // Base64 pads with up to two '=' characters at the end.
+    let padding = string.suffix(2).reduce(0) { partial, char in
+        partial + (char == "=" ? 1 : 0)
+    }
+    let raw = (length * 3) / 4 - padding
+    return max(raw, 0)
+}
+
+// Lightweight JSON tokenizer for syntax highlighting.
+// Returns: keys, string values, numbers, booleans/null.
+private func jsonSyntaxHighlightRanges(for text: String) -> ([NSRange], [NSRange], [NSRange], [NSRange]) {
+    let ns = text as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    if full.length == 0 {
+        return ([], [], [], [])
+    }
+
+    var keyRanges: [NSRange] = []
+    var stringRanges: [NSRange] = []
+    var numberRanges: [NSRange] = []
+    var keywordRanges: [NSRange] = []
+
+    // Keys: any string directly followed by a colon.
+    if let keyRegex = try? NSRegularExpression(
+        pattern: "\"([^\"\\\\]|\\\\.)*\"(?=\\s*:)",
+        options: []
+    ) {
+        for match in keyRegex.matches(in: text, options: [], range: full) {
+            let r = match.range
+            if r.location != NSNotFound && r.length > 0 {
+                keyRanges.append(r)
+            }
+        }
+    }
+
+    // All strings
+    var allStringRanges: [NSRange] = []
+    if let strRegex = try? NSRegularExpression(
+        pattern: "\"([^\"\\\\]|\\\\.)*\"",
+        options: []
+    ) {
+        for match in strRegex.matches(in: text, options: [], range: full) {
+            let r = match.range
+            if r.location != NSNotFound && r.length > 0 {
+                allStringRanges.append(r)
+            }
+        }
+    }
+    // Value strings = all strings minus key strings
+    outer: for r in allStringRanges {
+        for k in keyRanges {
+            if NSIntersectionRange(k, r).length > 0 {
+                continue outer
+            }
+        }
+        stringRanges.append(r)
+    }
+
+    // Numbers
+    if let numRegex = try? NSRegularExpression(
+        pattern: "(?<![\\w\".-])(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)",
+        options: []
+    ) {
+        for match in numRegex.matches(in: text, options: [], range: full) {
+            let r = match.range(at: 1)
+            if r.location != NSNotFound && r.length > 0 {
+                numberRanges.append(r)
+            }
+        }
+    }
+
+    // true / false / null
+    if let kwRegex = try? NSRegularExpression(
+        pattern: "\\b(true|false|null)\\b",
+        options: []
+    ) {
+        for match in kwRegex.matches(in: text, options: [], range: full) {
+            let r = match.range(at: 1)
+            if r.location != NSNotFound && r.length > 0 {
+                keywordRanges.append(r)
+            }
+        }
+    }
+
+    return (keyRanges, stringRanges, numberRanges, keywordRanges)
+}
+
+private struct PlainTextScrollView: NSViewRepresentable {
+    let proximityContextID: String
+    let text: String
+    let selection: NSRange?
+    let selectionScrollMode: SelectionScrollMode
+    let fontSize: CGFloat
+    let highlights: [NSRange]
+    let currentIndex: Int
+    let findCurrentRange: NSRange?
+    let scrollToBottomToken: Int
+    let onBottomProximityChange: (Bool) -> Void
+    let commandRanges: [NSRange]
+    let userRanges: [NSRange]
+    let assistantRanges: [NSRange]
+    let outputRanges: [NSRange]
+    let errorRanges: [NSRange]
+    let isJSONMode: Bool
+    let appAppearanceRaw: String
+    let colorScheme: ColorScheme
+    let monochrome: Bool
+
+    class Coordinator {
+        var lastWidth: CGFloat = 0
+        var lastPaintedHighlights: [NSRange] = []
+        var lastPaintedIndex: Int = -1
+        var lastFindRange: NSRange? = nil
+        var lastAppearanceRaw: String = ""
+        var lastColorScheme: ColorScheme?
+        var lastIsJSONMode: Bool = false
+        var lastMonochrome: Bool = false
+        var lastColorSignature: (Int, Int, Int, Int, Int) = (0, 0, 0, 0, 0)
+        var scrollView: NSScrollView?
+        var scrollObserver: NSObjectProtocol?
+        weak var observedDocumentView: NSView?
+        var documentFrameObserver: NSObjectProtocol?
+        var lastNearBottom: Bool? = nil
+        var lastProximityContextID: String = ""
+        var onBottomProximityChange: ((Bool) -> Void)?
+        var lastScrollToBottomToken: Int = 0
+
+        deinit {
+            if let scrollObserver {
+                NotificationCenter.default.removeObserver(scrollObserver)
+                self.scrollObserver = nil
+            }
+            if let documentFrameObserver {
+                NotificationCenter.default.removeObserver(documentFrameObserver)
+                self.documentFrameObserver = nil
+            }
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class PlainTextView: NSTextView {
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 48, !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.control), !event.modifierFlags.contains(.option) {
+                if event.modifierFlags.contains(.shift) {
+                    window?.selectPreviousKeyView(nil)
+                } else {
+                    window?.selectNextKeyView(nil)
+                }
+                return
+            }
+            super.keyDown(with: event)
+        }
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+
+        let textStorage = NSTextStorage()
+        let layoutManager = PlainFindLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: NSSize(width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+
+        let textView = PlainTextView(frame: NSRect(origin: .zero, size: scroll.contentSize), textContainer: container)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.minSize = NSSize(width: 0, height: scroll.contentSize.height)
+        textView.autoresizingMask = [.width]
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.containerSize = NSSize(width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+
+        // Enable non-contiguous layout for better performance on large documents
+        layoutManager.allowsNonContiguousLayout = true
+
+        // Explicitly set appearance to match app preference
+        let appAppearance = AppAppearance(rawValue: appAppearanceRaw) ?? .system
+        switch appAppearance {
+        case .light:
+            scroll.appearance = NSAppearance(named: .aqua)
+            textView.appearance = NSAppearance(named: .aqua)
+        case .dark:
+            scroll.appearance = NSAppearance(named: .darkAqua)
+            textView.appearance = NSAppearance(named: .darkAqua)
+        case .system:
+            scroll.appearance = nil
+            textView.appearance = nil
+        }
+        context.coordinator.lastAppearanceRaw = appAppearanceRaw
+        context.coordinator.lastColorScheme = colorScheme
+        context.coordinator.lastFindRange = findCurrentRange
+        context.coordinator.onBottomProximityChange = onBottomProximityChange
+        context.coordinator.lastProximityContextID = proximityContextID
+
+        // Set background with proper dark mode support
+        let isDark = (textView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+        let baseBackground: NSColor = isDark ? NSColor(white: 0.15, alpha: 1.0) : NSColor.textBackgroundColor
+
+        // Apply dimming effect when Find is active (like Apple Notes)
+        if !highlights.isEmpty {
+            textView.backgroundColor = isDark ? NSColor(white: 0.12, alpha: 1.0) : NSColor.black.withAlphaComponent(0.08)
+        } else {
+            textView.backgroundColor = baseBackground
+        }
+
+        textView.string = text
+        layoutManager.findRange = findCurrentRange
+        applySyntaxColors(textView)
+        applyFindHighlights(textView, coordinator: context.coordinator)
+
+        scroll.documentView = textView
+        installScrollObserverIfNeeded(scrollView: scroll, coordinator: context.coordinator)
+
+        if let sel = selection {
+            scrollSelection(textView, range: sel, mode: selectionScrollMode)
+            // Clear selection immediately to avoid blue highlight - we use yellow/white backgrounds instead
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+
+        if scrollToBottomToken != context.coordinator.lastScrollToBottomToken {
+            scrollToBottom(scrollView: scroll, textView: textView)
+            context.coordinator.lastScrollToBottomToken = scrollToBottomToken
+        }
+        emitBottomProximityIfNeeded(scrollView: scroll, coordinator: context.coordinator, force: true)
+        scheduleBottomProximityUpdate(scrollView: scroll, coordinator: context.coordinator)
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let tv = nsView.documentView as? NSTextView else { return }
+
+        context.coordinator.onBottomProximityChange = onBottomProximityChange
+        installScrollObserverIfNeeded(scrollView: nsView, coordinator: context.coordinator)
+
+        let proximityContextChanged = context.coordinator.lastProximityContextID != proximityContextID
+        if proximityContextChanged {
+            context.coordinator.lastProximityContextID = proximityContextID
+            context.coordinator.lastNearBottom = nil
+            emitBottomProximityIfNeeded(scrollView: nsView, coordinator: context.coordinator, force: true)
+        }
+
+        let textChanged = tv.string != text
+        let appearanceChanged = context.coordinator.lastAppearanceRaw != appAppearanceRaw
+        let schemeChanged = context.coordinator.lastColorScheme != colorScheme
+        let modeChanged = context.coordinator.lastIsJSONMode != isJSONMode
+        let monochromeChanged = context.coordinator.lastMonochrome != monochrome
+        let findRangeChanged = context.coordinator.lastFindRange != findCurrentRange
+        let colorSignature = (
+            commandRanges.count,
+            userRanges.count,
+            assistantRanges.count,
+            outputRanges.count,
+            errorRanges.count
+        )
+        let colorsChanged = colorSignature != context.coordinator.lastColorSignature
+
+        // Explicitly set NSView appearance when app appearance changes
+        if appearanceChanged {
+            let appAppearance = AppAppearance(rawValue: appAppearanceRaw) ?? .system
+            switch appAppearance {
+            case .light:
+                nsView.appearance = NSAppearance(named: .aqua)
+                tv.appearance = NSAppearance(named: .aqua)
+            case .dark:
+                nsView.appearance = NSAppearance(named: .darkAqua)
+                tv.appearance = NSAppearance(named: .darkAqua)
+            case .system:
+                nsView.appearance = nil
+                tv.appearance = nil
+            }
+            context.coordinator.lastAppearanceRaw = appAppearanceRaw
+        }
+
+        if textChanged {
+            tv.string = text
+            context.coordinator.lastPaintedHighlights = []
+        }
+
+        // Reapply colors when text, appearance, mode, monochrome, or ranges change
+        if textChanged || appearanceChanged || schemeChanged || modeChanged || monochromeChanged || colorsChanged {
+            applySyntaxColors(tv)
+        }
+
+        if let font = tv.font, abs(font.pointSize - fontSize) > 0.5 {
+            tv.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
+
+        // Set background with proper dark mode support
+        let isDark = (tv.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+        let baseBackground: NSColor = isDark ? NSColor(white: 0.15, alpha: 1.0) : NSColor.textBackgroundColor
+
+        // Apply/remove dimming effect based on Find state (like Apple Notes)
+        if !highlights.isEmpty {
+            tv.backgroundColor = isDark ? NSColor(white: 0.12, alpha: 1.0) : NSColor.black.withAlphaComponent(0.08)
+        } else {
+            tv.backgroundColor = baseBackground
+        }
+
+        let width = max(1, nsView.contentSize.width)
+        tv.textContainer?.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        tv.setFrameSize(NSSize(width: width, height: tv.frame.size.height))
+
+        // Scroll to current match if any
+        if let sel = selection {
+            scrollSelection(tv, range: sel, mode: selectionScrollMode)
+            // Clear selection immediately to avoid blue highlight - we use yellow/white backgrounds instead
+            tv.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+
+        if scrollToBottomToken != context.coordinator.lastScrollToBottomToken {
+            scrollToBottom(scrollView: nsView, textView: tv)
+            context.coordinator.lastScrollToBottomToken = scrollToBottomToken
+            emitBottomProximityIfNeeded(scrollView: nsView, coordinator: context.coordinator, force: true)
+            scheduleBottomProximityUpdate(scrollView: nsView, coordinator: context.coordinator)
+        }
+
+        applyFindHighlights(tv, coordinator: context.coordinator)
+
+        // Update local Find overlay (blue outline) via the custom layout manager
+        if findRangeChanged, let lm = tv.layoutManager as? PlainFindLayoutManager {
+            lm.findRange = findCurrentRange
+            lm.isDark = isDark
+            tv.setNeedsDisplay(tv.visibleRect)
+            context.coordinator.lastFindRange = findCurrentRange
+        } else if let lm = tv.layoutManager as? PlainFindLayoutManager {
+            lm.isDark = isDark
+        }
+
+        // Update last seen scheme at the end of the pass
+        context.coordinator.lastColorScheme = colorScheme
+        context.coordinator.lastIsJSONMode = isJSONMode
+        context.coordinator.lastMonochrome = monochrome
+        context.coordinator.lastColorSignature = colorSignature
+        emitBottomProximityIfNeeded(scrollView: nsView, coordinator: context.coordinator)
+        if textChanged || proximityContextChanged {
+            scheduleBottomProximityUpdate(scrollView: nsView, coordinator: context.coordinator)
+        }
+    }
+
+    private func installScrollObserverIfNeeded(scrollView: NSScrollView, coordinator: Coordinator) {
+        if coordinator.scrollView !== scrollView {
+            if let existing = coordinator.scrollObserver {
+                NotificationCenter.default.removeObserver(existing)
+                coordinator.scrollObserver = nil
+            }
+            if let existing = coordinator.documentFrameObserver {
+                NotificationCenter.default.removeObserver(existing)
+                coordinator.documentFrameObserver = nil
+            }
+            coordinator.observedDocumentView = nil
+            coordinator.scrollView = scrollView
+            coordinator.lastNearBottom = nil
+        }
+
+        if coordinator.scrollObserver == nil {
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            coordinator.scrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak coordinator, weak scrollView] _ in
+                guard let coordinator, let scrollView else { return }
+                emitBottomProximityIfNeeded(scrollView: scrollView, coordinator: coordinator)
+            }
+        }
+
+        if coordinator.observedDocumentView !== scrollView.documentView {
+            if let existing = coordinator.documentFrameObserver {
+                NotificationCenter.default.removeObserver(existing)
+                coordinator.documentFrameObserver = nil
+            }
+
+            coordinator.observedDocumentView = scrollView.documentView
+            if let documentView = scrollView.documentView {
+                documentView.postsFrameChangedNotifications = true
+                coordinator.documentFrameObserver = NotificationCenter.default.addObserver(
+                    forName: NSView.frameDidChangeNotification,
+                    object: documentView,
+                    queue: .main
+                ) { [weak coordinator, weak scrollView] _ in
+                    guard let coordinator, let scrollView else { return }
+                    emitBottomProximityIfNeeded(scrollView: scrollView, coordinator: coordinator)
+                }
+            }
+        }
+    }
+
+    private func emitBottomProximityIfNeeded(scrollView: NSScrollView,
+                                             coordinator: Coordinator,
+                                             force: Bool = false) {
+        let nearBottom = isNearBottom(scrollView: scrollView)
+        guard force || coordinator.lastNearBottom != nearBottom else { return }
+        coordinator.lastNearBottom = nearBottom
+        coordinator.onBottomProximityChange?(nearBottom)
+    }
+
+    private func scheduleBottomProximityUpdate(scrollView: NSScrollView, coordinator: Coordinator) {
+        for delay in [0.0, 0.05, 0.2] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak coordinator, weak scrollView] in
+                guard let coordinator, let scrollView else { return }
+                emitBottomProximityIfNeeded(scrollView: scrollView, coordinator: coordinator)
+            }
+        }
+    }
+
+    private func isNearBottom(scrollView: NSScrollView) -> Bool {
+        let visibleRect = scrollView.contentView.documentVisibleRect
+        let contentHeight = measuredContentHeight(scrollView: scrollView)
+        let maxOffset = max(0, contentHeight - visibleRect.height)
+        let currentOffset = max(0, min(visibleRect.origin.y, maxOffset))
+        let distanceToBottom = max(0, maxOffset - currentOffset)
+        return distanceToBottom <= 48
+    }
+
+    private func measuredContentHeight(scrollView: NSScrollView) -> CGFloat {
+        let visibleHeight = scrollView.contentView.documentVisibleRect.height
+        guard let documentView = scrollView.documentView else { return visibleHeight }
+
+        var contentHeight = max(documentView.bounds.height, documentView.frame.height, visibleHeight)
+        if let textView = documentView as? NSTextView,
+           let layoutManager = textView.layoutManager,
+           let textContainer = textView.textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+            let usedHeight = layoutManager.usedRect(for: textContainer).height + (textView.textContainerInset.height * 2)
+            contentHeight = max(contentHeight, usedHeight)
+        }
+        return contentHeight
+    }
+
+    private func scrollToBottom(scrollView: NSScrollView, textView: NSTextView) {
+        if textView.string.isEmpty {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            return
+        }
+
+        let length = (textView.string as NSString).length
+        textView.scrollRangeToVisible(NSRange(location: max(0, length - 1), length: 1))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private final class PlainFindLayoutManager: NSLayoutManager {
+        var findRange: NSRange? = nil
+        var isDark: Bool = false
+
+        override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+            super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+
+            guard let findRange, findRange.location != NSNotFound, findRange.length > 0 else { return }
+            guard let tc = textContainers.first else { return }
+
+            let findGlyphs = glyphRange(forCharacterRange: findRange, actualCharacterRange: nil)
+            guard NSIntersectionRange(findGlyphs, glyphsToShow).length > 0 else { return }
+
+            let stroke = NSColor.systemBlue.withAlphaComponent(isDark ? 0.92 : 0.85)
+            let glow = NSColor.systemBlue.withAlphaComponent(isDark ? 0.55 : 0.30)
+
+            enumerateLineFragments(forGlyphRange: findGlyphs) { _, _, container, glyphRange, _ in
+                guard container === tc else { return }
+                let g = NSIntersectionRange(glyphRange, findGlyphs)
+                guard g.length > 0 else { return }
+
+                var rect = self.boundingRect(forGlyphRange: g, in: tc)
+                rect = rect.offsetBy(dx: origin.x, dy: origin.y)
+                rect = rect.insetBy(dx: -2.0, dy: -1.0)
+
+                let radius: CGFloat = 4
+                let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+
+                NSGraphicsContext.saveGraphicsState()
+                let shadow = NSShadow()
+                shadow.shadowBlurRadius = 8
+                shadow.shadowOffset = .zero
+                shadow.shadowColor = glow
+                shadow.set()
+                stroke.setStroke()
+                path.lineWidth = 1.6
+                path.stroke()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+        }
+    }
+
+    private func scrollSelection(_ tv: NSTextView, range: NSRange, mode: SelectionScrollMode) {
+        switch mode {
+        case .ensureVisible:
+            tv.scrollRangeToVisible(range)
+        case .alignTop:
+            scrollRangeToTop(tv, range: range)
+        }
+    }
+
+    private func scrollRangeToTop(_ tv: NSTextView, range: NSRange) {
+        guard let scrollView = tv.enclosingScrollView,
+              let lm = tv.layoutManager,
+              let tc = tv.textContainer else {
+            tv.scrollRangeToVisible(range)
+            return
+        }
+
+        lm.ensureLayout(for: tc)
+        let glyph = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = lm.boundingRect(forGlyphRange: glyph, in: tc)
+        // Translate into view coordinates.
+        let origin = tv.textContainerOrigin
+        rect.origin.x += origin.x
+        rect.origin.y += origin.y
+
+        // Align the target line to the top, leaving a small breathing room equal to the text inset.
+        let padding = max(0, tv.textContainerInset.height)
+        let y = max(0, rect.minY - padding)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    // Apply syntax colors once when text changes (full document)
+    private func applySyntaxColors(_ tv: NSTextView) {
+        guard let textStorage = tv.textStorage else { return }
+        let full = NSRange(location: 0, length: (tv.string as NSString).length)
+
+        #if DEBUG
+        print("🎨 SYNTAX: cmd=\(commandRanges.count) user=\(userRanges.count) asst=\(assistantRanges.count) out=\(outputRanges.count) err=\(errorRanges.count)")
+        #endif
+
+        textStorage.beginEditing()
+
+        // Clear only foreground colors (not background - that's for find highlights)
+        textStorage.removeAttribute(.foregroundColor, range: full)
+
+        // Set base text color for all text (soft white in dark mode)
+        let isDarkMode = (tv.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+        let baseColor = isDarkMode ? NSColor(white: 0.92, alpha: 1.0) : NSColor.labelColor
+        textStorage.addAttribute(.foregroundColor, value: baseColor, range: full)
+
+        if isJSONMode {
+            // JSON syntax palette (approximate Xcode-style):
+            // - Keys: pink
+            // - String values: blue
+            // - Numbers: green
+            // - true/false/null: purple
+            let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+
+            if !commandRanges.isEmpty {
+                let color: NSColor = {
+                    if monochrome {
+                        return NSColor(white: 0.45, alpha: 1.0)  // JSON keys in gray
+                    } else {
+                        let basePink = NSColor.systemPink
+                        if isDarkMode || increaseContrast { return basePink }
+                        return basePink.withAlphaComponent(0.95)
+                    }
+                }()
+                for r in commandRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+                }
+            }
+            if !userRanges.isEmpty {
+                let color: NSColor = {
+                    if monochrome {
+                        return NSColor(white: 0.55, alpha: 1.0)  // JSON strings in gray
+                    } else {
+                        let baseBlue = NSColor.systemBlue
+                        if isDarkMode || increaseContrast { return baseBlue }
+                        return baseBlue.withAlphaComponent(0.9)
+                    }
+                }()
+                for r in userRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+                }
+            }
+            if !outputRanges.isEmpty {
+                let color: NSColor = {
+                    if monochrome {
+                        return NSColor(white: 0.65, alpha: 1.0)  // JSON numbers in gray
+                    } else {
+                        let baseGreen = NSColor.systemGreen
+                        if isDarkMode || increaseContrast { return baseGreen }
+                        return baseGreen.withAlphaComponent(0.9)
+                    }
+                }()
+                for r in outputRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+                }
+            }
+            if !assistantRanges.isEmpty {
+                let color: NSColor = {
+                    if monochrome {
+                        return NSColor(white: 0.35, alpha: 1.0)  // JSON keywords in gray
+                    } else {
+                        let basePurple = NSColor.systemPurple
+                        if isDarkMode || increaseContrast { return basePurple }
+                        return basePurple.withAlphaComponent(0.9)
+                    }
+                }()
+                for r in assistantRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+                }
+            }
+        } else {
+            // Terminal transcript palette
+            // Command colorization (foreground) – orange for high distinction
+            if !commandRanges.isEmpty {
+                let isDark = isDarkMode
+                let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                let color: NSColor = {
+                    if monochrome {
+                        return NSColor(white: 0.4, alpha: 1.0)  // Commands in darker gray
+                    } else {
+                        let baseOrange = NSColor.systemOrange
+                        if isDark || increaseContrast { return baseOrange }
+                        return baseOrange.withAlphaComponent(0.95)
+                    }
+                }()
+                for r in commandRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+                }
+            }
+            // User input colorization (blue)
+            if !userRanges.isEmpty {
+                let isDark = isDarkMode
+                let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                let color: NSColor = {
+                    if monochrome {
+                        return NSColor(white: 0.5, alpha: 1.0)  // User input in medium gray
+                    } else {
+                        let baseBlue = NSColor.systemBlue
+                        if isDark || increaseContrast { return baseBlue }
+                        return baseBlue.withAlphaComponent(0.9)
+                    }
+                }()
+                for r in userRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+                }
+            }
+            // Assistant response colorization (subtle gray - less prominent)
+            if !assistantRanges.isEmpty {
+                let isDark = isDarkMode
+                let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                let baseGray = NSColor.secondaryLabelColor
+                let gray: NSColor = {
+                    if isDark || increaseContrast { return baseGray }
+                    return baseGray.withAlphaComponent(0.8)
+                }()
+                for r in assistantRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: gray, range: r)
+                }
+            }
+	            // Tool output colorization (green family)
+	            if !outputRanges.isEmpty {
+	                let isDark = isDarkMode
+	                let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+	                let color: NSColor = {
+	                    if monochrome {
+	                        return NSColor(white: 0.6, alpha: 1.0)  // Tool output in lighter gray
+	                    } else {
+	                        let baseGreen = NSColor.systemGreen
+	                        if isDark || increaseContrast { return baseGreen }
+	                        return baseGreen.withAlphaComponent(0.90)
+	                    }
+	                }()
+	                    for r in outputRanges where NSMaxRange(r) <= full.length {
+	                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+	                }
+	            }
+            // Error colorization (red)
+            if !errorRanges.isEmpty {
+                let isDark = isDarkMode
+                let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                let color: NSColor = {
+                    if monochrome {
+                        return NSColor(white: 0.3, alpha: 1.0)  // Errors in darkest gray for emphasis
+                    } else {
+                        let baseRed = NSColor.systemRed
+                        if isDark || increaseContrast { return baseRed }
+                        return baseRed.withAlphaComponent(0.9)
+                    }
+                }()
+                for r in errorRanges where NSMaxRange(r) <= full.length {
+                    textStorage.addAttribute(.foregroundColor, value: color, range: r)
+                }
+            }
+        }
+
+        textStorage.endEditing()
+    }
+
+    // Apply find highlights with scoped layout/invalidation for performance
+    private func applyFindHighlights(_ tv: NSTextView, coordinator: Coordinator) {
+        assert(Thread.isMainThread, "applyFindHighlights must be called on main thread")
+
+        guard let textStorage = tv.textStorage,
+              let lm = tv.layoutManager,
+              let tc = tv.textContainer else {
+            print("⚠️ FIND: Missing textStorage/layoutManager/textContainer")
+            return
+        }
+
+        let full = NSRange(location: 0, length: (tv.string as NSString).length)
+
+        // Check if highlights or the current index changed
+        let highlightsChanged = coordinator.lastPaintedHighlights != highlights || coordinator.lastPaintedIndex != currentIndex
+
+        print("🔍 FIND: highlights=\(highlights.count), lastPainted=\(coordinator.lastPaintedHighlights.count), changed=\(highlightsChanged), currentIndex=\(currentIndex)")
+
+        if !highlightsChanged {
+            // Just show indicator, attributes already correct
+            if findCurrentRange == nil, !highlights.isEmpty, currentIndex < highlights.count {
+                tv.showFindIndicator(for: highlights[currentIndex])
+            }
+            return
+        }
+
+        // Get visible range for scoped invalidation/layout (performance optimization)
+        // IMPORTANT: glyphRange(forBoundingRect:in:) expects container coordinates, not view coordinates
+        let visRectView = tv.enclosingScrollView?.contentView.documentVisibleRect ?? tv.visibleRect
+        let origin = tv.textContainerOrigin
+        let visRectInContainer = visRectView.offsetBy(dx: -origin.x, dy: -origin.y)
+        var visGlyphs = lm.glyphRange(forBoundingRect: visRectInContainer, in: tc)
+        var visChars = lm.characterRange(forGlyphRange: visGlyphs, actualGlyphRange: nil)
+        // Fallback: if visible character range is empty (can happen during layout churn), widen to a reasonable window
+        if visChars.length == 0 {
+            visChars = NSIntersectionRange(full, NSRange(location: max(0, tv.selectedRange().location - 2000), length: 4000))
+            visGlyphs = lm.glyphRange(forCharacterRange: visChars, actualCharacterRange: nil)
+        }
+
+        print("🔍 VISIBLE: visChars.length=\(visChars.length), visChars=\(visChars)")
+
+        textStorage.beginEditing()
+
+        // Clear ALL old highlights (full document - ensures clean slate)
+        for r in coordinator.lastPaintedHighlights {
+            if NSMaxRange(r) <= full.length {
+                textStorage.removeAttribute(.backgroundColor, range: r)
+            }
+        }
+
+        // Paint ALL new highlights (full document - ensures they're present when scrolling)
+        let currentBG = NSColor(deviceRed: 1.0, green: 0.92, blue: 0.0, alpha: 1.0)  // Yellow
+        let otherBG = NSColor(deviceRed: 1.0, green: 1.0, blue: 1.0, alpha: 0.9)     // White
+        let matchFG = NSColor.black
+        for (i, r) in highlights.enumerated() {
+            if NSMaxRange(r) <= full.length {
+                let bg = (i == currentIndex) ? currentBG : otherBG
+                textStorage.addAttribute(.backgroundColor, value: bg, range: r)
+                textStorage.addAttribute(.foregroundColor, value: matchFG, range: r)
+            }
+        }
+
+        textStorage.endEditing()
+
+        // Fix attributes only in VISIBLE region (performance win). Avoid clearing backgrounds.
+        textStorage.fixAttributes(in: visChars)
+
+        // Invalidate only VISIBLE region (performance win)
+        lm.invalidateDisplay(forCharacterRange: visChars)
+
+        // Layout only VISIBLE region (BIG performance win - avoids full-document layout thrashing)
+        let glyphRange = lm.glyphRange(forCharacterRange: visChars, actualCharacterRange: nil)
+        lm.ensureLayout(forGlyphRange: glyphRange)
+
+        tv.setNeedsDisplay(visRectView)
+
+        print("✅ FIND: Painted \(highlights.count) highlights, visibleRange=\(visChars)")
+
+        // Update cache
+        coordinator.lastPaintedHighlights = highlights
+
+        // Show Apple Notes-style find indicator for current match when local Find is not active.
+        if findCurrentRange == nil, !highlights.isEmpty, currentIndex < highlights.count {
+            tv.showFindIndicator(for: highlights[currentIndex])
+        }
+
+        coordinator.lastPaintedIndex = currentIndex
+    }
+}
+
+private struct WholeSessionRawPrettySheet: View {
+    let session: Session?
+    @Environment(\.dismiss) private var dismiss
+    @State private var tab: Int = 0
+    @State private var rawJSON: String = ""
+    @State private var prettyJSON: String = ""
+    @State private var loadedSessionID: String?
+
+    private var contentTaskID: String {
+        session?.id ?? "__no-session__"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Picker("", selection: $tab) {
+                Text("Pretty").tag(0)
+                Text("Raw JSON").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(8)
+            Divider()
+            ScrollView {
+                if let s = session {
+                    if loadedSessionID != s.id {
+                        ProgressView("Loading transcript")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if tab == 0 {
+                        Text(prettyJSON).font(.system(.body, design: .monospaced)).textSelection(.enabled).padding(12)
+                    } else {
+                        Text(rawJSON).font(.system(.body, design: .monospaced)).textSelection(.enabled).padding(12)
+                    }
+                } else {
+                    ContentUnavailableView("No session", systemImage: "doc")
+                }
+            }
+            HStack { Spacer(); Button("Close") { dismiss() } }.padding(8)
+        }
+        .frame(width: 720, height: 520)
+        .task(id: contentTaskID) {
+            await loadContent()
+        }
+    }
+
+    private func loadContent() async {
+        guard let session else {
+            await MainActor.run {
+                rawJSON = ""
+                prettyJSON = ""
+                loadedSessionID = nil
+            }
+            return
+        }
+
+        let raw = session.events.map { $0.rawJSON }.joined(separator: "\n")
+        let pretty = prettyJSONForSession(session)
+
+        await MainActor.run {
+            rawJSON = raw
+            prettyJSON = pretty
+            loadedSessionID = session.id
+        }
+    }
+}

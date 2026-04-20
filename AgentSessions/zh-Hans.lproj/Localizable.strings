@@ -1,0 +1,2624 @@
+/* No comment provided by engineer. */
+" " = " ";
+
+/* No comment provided by engineer. */
+" sessions from Codex CLI, Claude Code, and OpenCode." = " 中来自 Codex CLI、Claude Code 和 OpenCode 的会话。";
+
+/* No comment provided by engineer. */
+"--" = "--";
+
+/* No comment provided by engineer. */
+"—" = "—";
+
+/* No comment provided by engineer. */
+"(%lld)" = "(%lld)";
+
+/* No comment provided by engineer. */
+"(%lld%%)" = "(%lld%%)";
+
+/* No comment provided by engineer. */
+"@jazzyalex" = "@jazzyalex";
+
+/* No comment provided by engineer. */
+"/path/to/agent" = "/path/to/agent";
+
+/* No comment provided by engineer. */
+"/path/to/claude" = "/path/to/claude";
+
+/* No comment provided by engineer. */
+"/path/to/codex" = "/path/to/codex";
+
+/* No comment provided by engineer. */
+"/path/to/copilot" = "/path/to/copilot";
+
+/* No comment provided by engineer. */
+"/path/to/droid" = "/path/to/droid";
+
+/* No comment provided by engineer. */
+"/path/to/gemini" = "/path/to/gemini";
+
+/* No comment provided by engineer. */
+"/path/to/openclaw" = "/path/to/openclaw";
+
+/* No comment provided by engineer. */
+"/path/to/opencode" = "/path/to/opencode";
+
+/* No comment provided by engineer. */
+"%@ %@" = "%@ %@";
+
+/* No comment provided by engineer. */
+"%@ %@ session" = "%@ %@ 会话";
+
+/* No comment provided by engineer. */
+"%@ hidden by current filters. Adjust in Settings." = "当前筛选条件已隐藏 %@ 项。可在“设置”中调整。";
+
+/* No comment provided by engineer. */
+"%@ sessions found" = "找到 %@ 个会话";
+
+/* No comment provided by engineer. */
+"%@: %@%@" = "%@: %@%@";
+
+/* No comment provided by engineer. */
+"%lld" = "%lld";
+
+/* No comment provided by engineer. */
+"%lld active • %lld waiting" = "%lld 个活跃 • %lld 个等待中";
+
+/* No comment provided by engineer. */
+"%lld image%@" = "%lld 张图片";
+
+/* No comment provided by engineer. */
+"%lld issue%@ detected" = "检测到 %lld 个问题";
+
+/* No comment provided by engineer. */
+"%lld messages" = "%lld 条消息";
+
+/* No comment provided by engineer. */
+"%lld saved" = "已保存 %lld 项";
+
+/* No comment provided by engineer. */
+"%lld selected" = "已选择 %lld 项";
+
+/* No comment provided by engineer. */
+"%lld/%lld sessions" = "%lld/%lld 个会话";
+
+/* No comment provided by engineer. */
+"%lld%%" = "%lld%%";
+
+/* No comment provided by engineer. */
+"%lld%% %@" = "%lld%% %@";
+
+/* No comment provided by engineer. */
+"•" = "•";
+
+/* No comment provided by engineer. */
+"↻" = "↻";
+
+/* No comment provided by engineer. */
+"↻ %@" = "↻ %@";
+
+/* No comment provided by engineer. */
+"+" = "+";
+
+/* No comment provided by engineer. */
+">" = ">";
+
+/* No comment provided by engineer. */
+"|" = "|";
+
+/* No comment provided by engineer. */
+"~/.copilot/session-state" = "~/.copilot/session-state";
+
+/* No comment provided by engineer. */
+"~/.cursor" = "~/.cursor";
+
+/* No comment provided by engineer. */
+"~/.cursor/chats/*/*/store.db" = "~/.cursor/chats/*/*/store.db";
+
+/* No comment provided by engineer. */
+"~/.cursor/projects/*/agent-transcripts/" = "~/.cursor/projects/*/agent-transcripts/";
+
+/* No comment provided by engineer. */
+"~/.factory/projects" = "~/.factory/projects";
+
+/* No comment provided by engineer. */
+"~/.factory/sessions" = "~/.factory/sessions";
+
+/* No comment provided by engineer. */
+"~/.openclaw" = "~/.openclaw";
+
+/* No comment provided by engineer. */
+"−" = "−";
+
+/* No comment provided by engineer. */
+"⌘F" = "⌘F";
+
+/* No comment provided by engineer. */
+"⌘K" = "⌘K";
+
+/* No comment provided by engineer. */
+"⌥⌘F" = "⌥⌘F";
+
+/* No comment provided by engineer. */
+"▶️" = "▶️";
+
+/* No comment provided by engineer. */
+"★" = "★";
+
+/* No comment provided by engineer. */
+"💡" = "💡";
+
+/* No comment provided by engineer. */
+"📂" = "📂";
+
+/* No comment provided by engineer. */
+"🔄" = "🔄";
+
+/* No comment provided by engineer. */
+"🔴" = "🔴";
+
+/* No comment provided by engineer. */
+"1 minute" = "1 分钟";
+
+/* No comment provided by engineer. */
+"3 minutes" = "3 分钟";
+
+/* No comment provided by engineer. */
+"5 minutes" = "5 分钟";
+
+/* No comment provided by engineer. */
+"5h only" = "仅 5 小时";
+
+/* No comment provided by engineer. */
+"5h: " = "5小时：";
+
+/* No comment provided by engineer. */
+"5h: %@" = "5小时：%@";
+
+/* No comment provided by engineer. */
+"10 min" = "10 分钟";
+
+/* No comment provided by engineer. */
+"15 minutes" = "15 分钟";
+
+/* No comment provided by engineer. */
+"30 min" = "30 分钟";
+
+/* No comment provided by engineer. */
+"30 minutes" = "30 分钟";
+
+/* No comment provided by engineer. */
+"60 min" = "60 分钟";
+
+/* No comment provided by engineer. */
+"A" = "A";
+
+/* No comment provided by engineer. */
+"Abort resetting preferences" = "放弃重置设置";
+
+/* No comment provided by engineer. */
+"About" = "关于";
+
+/* No comment provided by engineer. */
+"About Agent Sessions" = "关于 Agent Sessions";
+
+/* No comment provided by engineer. */
+"Active" = "活跃";
+
+/* No comment provided by engineer. */
+"Active (working)" = "活跃（工作中）";
+
+/* No comment provided by engineer. */
+"Active %@ session" = "活跃的 %@ 会话";
+
+/* No comment provided by engineer. */
+"Active registry directory (optional)" = "活跃注册目录（可选）";
+
+/* No comment provided by engineer. */
+"ACTIVITY BY PERIOD" = "按时段统计活跃度";
+
+/* No comment provided by engineer. */
+"Advanced" = "高级";
+
+/* No comment provided by engineer. */
+"Affects Resume actions in the Sessions window for all CLI agents." = "影响“会话”窗口中所有 CLI Agent 的“恢复”操作。";
+
+/* No comment provided by engineer. */
+"Affects usage strips, source labels, and CLI Agent colors in Sessions." = "影响“会话”中的用量条、来源标签和 CLI Agent 颜色。";
+
+/* No comment provided by engineer. */
+"After a saved session stops changing upstream for this long, Agent Sessions stops syncing the local copy. If it changes later, syncing resumes." = "当已保存会话在上游停止变化达到此时长后，Agent Sessions 会停止同步本地副本。若之后再次变化，则会恢复同步。";
+
+/* No comment provided by engineer. */
+"After each status probe, only Codex probe sessions are deleted once safety checks verify they were created by Agent Sessions." = "每次状态探测后，只有在安全检查确认这些会话确实由 Agent Sessions 创建时，才会删除 Codex 探测会话。";
+
+/* No comment provided by engineer. */
+"After each usage probe, only the dedicated Claude probe project is deleted once safety checks verify it contains only probe sessions." = "每次用量探测后，只有在安全检查确认其中只包含探测会话时，才会删除专用的 Claude 探测项目。";
+
+/* No comment provided by engineer. */
+"Agent" = "智能体";
+
+/* No comment provided by engineer. */
+"Agent Cockpit" = "Agent 控制台";
+
+/* No comment provided by engineer. */
+"Agent Details" = "Agent 详情";
+
+/* No comment provided by engineer. */
+"Agent Sessions" = "Agent Sessions";
+
+/* No comment provided by engineer. */
+"Agent Sessions is a local-only app with no telemetry. This short form is the only way for us to receive your feedback." = "Agent Sessions 是一款纯本地应用，不含遥测。这份简短表单是我们接收你反馈的唯一方式。";
+
+/* No comment provided by engineer. */
+"Agent Sessions will only import files that match Droid’s stream-json schema to avoid false positives." = "Agent Sessions 只会导入符合 Droid stream-json 模式的文件，以避免误判。";
+
+/* No comment provided by engineer. */
+"Agent:" = "智能体：";
+
+/* No comment provided by engineer. */
+"All" = "全部";
+
+/* No comment provided by engineer. */
+"All %lld" = "全部 %lld";
+
+/* No comment provided by engineer. */
+"All Agents" = "全部 Agent";
+
+/* No comment provided by engineer. */
+"All Clear" = "一切正常";
+
+/* No comment provided by engineer. */
+"All Coding Agents" = "所有编码 Agent";
+
+/* No comment provided by engineer. */
+"All Projects" = "全部项目";
+
+/* No comment provided by engineer. */
+"All Sessions in Project" = "项目内全部会话";
+
+/* No comment provided by engineer. */
+"All Time" = "全部时间";
+
+/* No comment provided by engineer. */
+"Allow auto /status probe when no recent sessions" = "在最近没有会话时允许自动执行 /status 探测";
+
+/* No comment provided by engineer. */
+"Also respects macOS System Settings > Accessibility > Display > Reduce transparency." = "同时遵循 macOS 系统设置 > 辅助功能 > 显示 > 降低透明度。";
+
+/* No comment provided by engineer. */
+"An update is available" = "有可用更新";
+
+/* No comment provided by engineer. */
+"Analytics" = "分析";
+
+/* No comment provided by engineer. */
+"Analytics Is Now On Demand" = "分析现已改为按需构建";
+
+/* No comment provided by engineer. */
+"Applies to Codex and Claude usage strips and menu bar reset meters." = "适用于 Codex 和 Claude 的用量条以及菜单栏重置指示。";
+
+/* No comment provided by engineer. */
+"AS" = "AS";
+
+/* No comment provided by engineer. */
+"Auth-backed tracking is primary for Codex limits. JSONL remains fallback-only for limits, and /status is used as a last resort." = "基于认证的跟踪是 Codex 额度的主来源。JSONL 仅作为额度回退，/status 只在最后兜底时使用。";
+
+/* No comment provided by engineer. */
+"Auto" = "自动";
+
+/* No comment provided by engineer. */
+"Auto-delete after each probe" = "每次探测后自动删除";
+
+/* No comment provided by engineer. */
+"Auto-fit compact height to visible sessions" = "根据可见会话自动适配紧凑模式高度";
+
+/* No comment provided by engineer. */
+"Auto-Update" = "自动更新";
+
+/* No comment provided by engineer. */
+"Auto: OAuth endpoint (60s), falls back to tmux on failure. Web API only: claude.ai session cookie. tmux only: legacy behavior." = "自动：优先 OAuth 端点（60 秒），失败时回退到 tmux。仅 Web API：使用 claude.ai 会话 cookie。仅 tmux：沿用旧行为。";
+
+/* No comment provided by engineer. */
+"Automatically download and install app updates" = "自动下载并安装应用更新";
+
+/* No comment provided by engineer. */
+"Avg Session" = "平均会话时长";
+
+/* No comment provided by engineer. */
+"Back" = "返回";
+
+/* No comment provided by engineer. */
+"Bars" = "条形";
+
+/* No comment provided by engineer. */
+"Beta feature. Tracks live/open Codex and Claude sessions, enables Cockpit live rows, and powers live dots/focus actions in Sessions." = "Beta 功能。跟踪当前打开/活跃的 Codex 与 Claude 会话，启用 Cockpit 实时行，并为“会话”中的实时状态点和聚焦操作提供支持。";
+
+/* No comment provided by engineer. */
+"Binary name: gemini · Install via npm: npm install -g @google/gemini-cli" = "可执行文件名：gemini；通过 npm 安装：npm install -g @google/gemini-cli";
+
+/* No comment provided by engineer. */
+"Both" = "两者";
+
+/* No comment provided by engineer. */
+"Browse for a directory containing active-session presence JSON files" = "选择包含活跃会话 presence JSON 文件的目录";
+
+/* No comment provided by engineer. */
+"Browse for a directory to store Claude session logs" = "选择用于存放 Claude 会话日志的目录";
+
+/* No comment provided by engineer. */
+"Browse for a directory to store Codex session logs" = "选择用于存放 Codex 会话日志的目录";
+
+/* No comment provided by engineer. */
+"Browse for a directory to store Gemini session logs" = "选择用于存放 Gemini 会话日志的目录";
+
+/* No comment provided by engineer. */
+"Browse for a directory to store OpenCode session logs" = "选择用于存放 OpenCode 会话日志的目录";
+
+/* No comment provided by engineer. */
+"Browse your Claude Code conversations" = "浏览你的 Claude Code 对话";
+
+/* No comment provided by engineer. */
+"Browse your GitHub Copilot chat history" = "浏览你的 GitHub Copilot 聊天记录";
+
+/* No comment provided by engineer. */
+"Build a token-based index over tool inputs and outputs for sessions from the last 90 days. Improves Instant search but may increase disk usage and indexing time. Older indexed tool I/O is retained up to 25 MB." = "为最近 90 天会话中的工具输入与输出构建基于分词的索引。可提升即时搜索速度，但会增加磁盘占用和索引时间。较早的已索引工具 I/O 最多保留 25 MB。";
+
+/* No comment provided by engineer. */
+"Building analytics index… %lld%%" = "正在构建分析索引… %lld%%";
+
+/* No comment provided by engineer. */
+"Building JSON view…" = "正在构建 JSON 视图…";
+
+/* No comment provided by engineer. */
+"Buy me a coffee" = "请我喝杯咖啡";
+
+/* No comment provided by engineer. */
+"By Agent" = "按 Agent";
+
+/* No comment provided by engineer. */
+"BY AGENT" = "按 AGENT";
+
+/* No comment provided by engineer. */
+"By Project" = "按项目";
+
+/* No comment provided by engineer. */
+"Cancel" = "取消";
+
+/* No comment provided by engineer. */
+"Cancel Build" = "取消构建";
+
+/* No comment provided by engineer. */
+"CAUTION" = "注意";
+
+/* No comment provided by engineer. */
+"Changed" = "已更改";
+
+/* No comment provided by engineer. */
+"Changes Detected" = "检测到变更";
+
+/* No comment provided by engineer. */
+"Check for a newer Claude CLI version and optionally update it" = "检查 Claude CLI 是否有较新版本，并可选择更新";
+
+/* No comment provided by engineer. */
+"Check for a newer Codex CLI version and optionally update it" = "检查 Codex CLI 是否有较新版本，并可选择更新";
+
+/* No comment provided by engineer. */
+"Check for a newer Droid CLI version and optionally update it" = "检查 Droid CLI 是否有较新版本，并可选择更新";
+
+/* No comment provided by engineer. */
+"Check for a newer Gemini CLI version and optionally update it" = "检查 Gemini CLI 是否有较新版本，并可选择更新";
+
+/* No comment provided by engineer. */
+"Check for a newer GitHub Copilot CLI version and optionally update it" = "检查 GitHub Copilot CLI 是否有较新版本，并可选择更新";
+
+/* No comment provided by engineer. */
+"Check for a newer OpenClaw CLI version and optionally update it" = "检查 OpenClaw CLI 是否有较新版本，并可选择更新";
+
+/* No comment provided by engineer. */
+"Check for a newer OpenCode CLI version and optionally update it" = "检查 OpenCode CLI 是否有较新版本，并可选择更新";
+
+/* No comment provided by engineer. */
+"Check for new versions and install updates" = "检查新版本并安装更新";
+
+/* No comment provided by engineer. */
+"Check for Updates..." = "检查更新...";
+
+/* No comment provided by engineer. */
+"Check for Updates…" = "检查更新…";
+
+/* No comment provided by engineer. */
+"Check Version" = "检查版本";
+
+/* No comment provided by engineer. */
+"Checking..." = "检查中...";
+
+/* No comment provided by engineer. */
+"Choose a session" = "选择会话";
+
+/* No comment provided by engineer. */
+"Choose a session to resume in Codex" = "选择要在 Codex 中恢复的会话";
+
+/* No comment provided by engineer. */
+"Choose colored or monochrome styling for agent accents" = "选择 Agent 强调色使用彩色还是单色样式";
+
+/* No comment provided by engineer. */
+"Choose the Codex binary automatically or specify a custom executable" = "自动选择 Codex 可执行文件，或指定自定义可执行文件";
+
+/* No comment provided by engineer. */
+"Choose the overall app appearance" = "选择应用整体外观";
+
+/* No comment provided by engineer. */
+"Choose whether usage meters show remaining (left) or used percentages." = "选择用量指示显示剩余百分比还是已用百分比。";
+
+/* No comment provided by engineer. */
+"Choose which app receives transcript file links." = "选择由哪个应用打开转录文件链接。";
+
+/* No comment provided by engineer. */
+"Choose which terminal application handles Resume for all CLI agents" = "选择由哪个终端应用处理所有 CLI Agent 的“恢复”操作";
+
+/* No comment provided by engineer. */
+"Choose…" = "选择…";
+
+/* No comment provided by engineer. */
+"Claude" = "Claude";
+
+/* No comment provided by engineer. */
+"Claude /usage Probe" = "Claude /usage 探测";
+
+/* No comment provided by engineer. */
+"Claude CLI not found" = "未找到 Claude CLI";
+
+/* No comment provided by engineer. */
+"Claude Code" = "Claude Code";
+
+/* No comment provided by engineer. */
+"Claude Only" = "Claude Only";
+
+/* No comment provided by engineer. */
+"Claude Probe Cleanup" = "Claude 探测清理";
+
+/* No comment provided by engineer. */
+"Claude Usage Tracking (Experimental)" = "Claude 用量跟踪（实验性）";
+
+/* No comment provided by engineer. */
+"Claude usage tracking requires tmux to run headlessly. Install via Homebrew:\\n\\n  brew install tmux\\n\\nThen enable Usage Tracking again." = "Claude 用量跟踪需要借助 tmux 以无界面方式运行。请先通过 Homebrew 安装：\n\n  brew install tmux\n\n安装完成后，再重新启用“用量跟踪”。";
+
+/* No comment provided by engineer. */
+"Clean Claude probe sessions now" = "立即清理 Claude 探测会话";
+
+/* No comment provided by engineer. */
+"Clear" = "清除";
+
+/* No comment provided by engineer. */
+"Clear and rebuild the core sessions index. Use only when indexing appears corrupted." = "清除并重建核心会话索引。仅在索引看起来损坏时使用。";
+
+/* No comment provided by engineer. */
+"Clear Find (⎋)" = "清除查找（⎋）";
+
+/* No comment provided by engineer. */
+"Clear Pending" = "清除待处理项";
+
+/* No comment provided by engineer. */
+"Clear Pending Crash Reports?" = "清除待处理的崩溃报告？";
+
+/* No comment provided by engineer. */
+"Clear search" = "清除搜索";
+
+/* No comment provided by engineer. */
+"Clear search (⎋)" = "清除搜索（⎋）";
+
+/* No comment provided by engineer. */
+"Clear Unified Search" = "清除统一搜索";
+
+/* No comment provided by engineer. */
+"CLI Agent" = "CLI 智能体";
+
+/* No comment provided by engineer. */
+"CLI not found" = "未找到 CLI";
+
+/* No comment provided by engineer. */
+"Close" = "关闭";
+
+/* No comment provided by engineer. */
+"Close Find (⎋)" = "关闭查找（⎋）";
+
+/* No comment provided by engineer. */
+"Cockpit screenshot unavailable" = "Cockpit 截图不可用";
+
+/* No comment provided by engineer. */
+"Codex" = "Codex";
+
+/* No comment provided by engineer. */
+"Codex /status Probe" = "Codex /status 探测";
+
+/* No comment provided by engineer. */
+"Codex %@" = "Codex %@";
+
+/* No comment provided by engineer. */
+"Codex %@ does not fully support resume by ID. Enable the fallback launch option below." = "Codex %@ 目前尚不完全支持按 ID 恢复。请在下方启用回退启动选项。";
+
+/* No comment provided by engineer. */
+"Codex CLI" = "Codex CLI";
+
+/* No comment provided by engineer. */
+"Codex CLI not found" = "未找到 Codex CLI";
+
+/* No comment provided by engineer. */
+"Codex is not found" = "未找到 Codex";
+
+/* No comment provided by engineer. */
+"Codex Only" = "Codex Only";
+
+/* No comment provided by engineer. */
+"Codex Probe Cleanup" = "Codex 探测清理";
+
+/* No comment provided by engineer. */
+"Codex session ID" = "Codex 会话 ID";
+
+/* No comment provided by engineer. */
+"Color" = "颜色";
+
+/* No comment provided by engineer. */
+"Compact mode" = "紧凑模式";
+
+/* No comment provided by engineer. */
+"Confirm and restore default settings across all tabs" = "确认并恢复所有标签页的默认设置";
+
+/* No comment provided by engineer. */
+"Conflict Risk" = "存在冲突风险";
+
+/* No comment provided by engineer. */
+"Consumes tokens for 1-2 messages" = "大约消耗 1-2 条消息的 token";
+
+/* No comment provided by engineer. */
+"Copilot" = "Copilot";
+
+/* No comment provided by engineer. */
+"Copilot CLI" = "Copilot CLI";
+
+/* No comment provided by engineer. */
+"Copilot Only" = "Copilot Only";
+
+/* No comment provided by engineer. */
+"Copy" = "复制";
+
+/* No comment provided by engineer. */
+"Copy a terminal-agnostic resume command to the clipboard" = "将与终端无关的恢复命令复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy Block" = "复制区块";
+
+/* No comment provided by engineer. */
+"Copy brew command" = "复制 brew 命令";
+
+/* No comment provided by engineer. */
+"Copy entire transcript to clipboard (⌥⌘C)" = "将完整转录复制到剪贴板（⌥⌘C）";
+
+/* No comment provided by engineer. */
+"Copy Image" = "复制图片";
+
+/* No comment provided by engineer. */
+"Copy Image Path (for CLI agent)" = "复制图片路径（供 CLI Agent 使用）";
+
+/* No comment provided by engineer. */
+"Copy Path" = "复制路径";
+
+/* No comment provided by engineer. */
+"Copy Resume Command" = "复制恢复命令";
+
+/* No comment provided by engineer. */
+"Copy Session ID" = "复制会话 ID";
+
+/* No comment provided by engineer. */
+"Copy session ID: %@ (⌘⇧C)" = "复制会话 ID：%@（⌘⇧C）";
+
+/* No comment provided by engineer. */
+"Copy Tab Title" = "复制标签页标题";
+
+/* No comment provided by engineer. */
+"Copy the detected Claude CLI path to clipboard" = "将检测到的Claude CLI path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the detected Codex binary path to clipboard" = "将检测到的Codex binary path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the detected Copilot CLI path to clipboard" = "将检测到的Copilot CLI path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the detected Cursor CLI path to clipboard" = "将检测到的Cursor CLI path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the detected Droid CLI path to clipboard" = "将检测到的Droid CLI path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the detected Gemini CLI path to clipboard" = "将检测到的Gemini CLI path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the detected OpenClaw binary path to clipboard" = "将检测到的OpenClaw binary path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the detected OpenCode CLI path to clipboard" = "将检测到的OpenCode CLI path复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy the session ID to the clipboard" = "将会话 ID 复制到剪贴板";
+
+/* No comment provided by engineer. */
+"Copy Transcript" = "复制转录";
+
+/* No comment provided by engineer. */
+"Copy Working Directory Path" = "复制工作目录路径";
+
+/* No comment provided by engineer. */
+"Could not open session" = "无法打开会话";
+
+/* No comment provided by engineer. */
+"Counts total messages across conversations" = "统计所有会话中的消息总数";
+
+/* No comment provided by engineer. */
+"Counts unique conversations" = "统计唯一会话数量";
+
+/* No comment provided by engineer. */
+"Crash report detected" = "检测到崩溃报告";
+
+/* No comment provided by engineer. */
+"Crash Reports" = "崩溃报告";
+
+/* No comment provided by engineer. */
+"Crash reports are collected locally. Use the email link below to open a pre-filled report email." = "崩溃报告仅在本地收集。使用下方邮件链接可打开一封已预填内容的报告邮件。";
+
+/* No comment provided by engineer. */
+"Created %@" = "创建于 %@";
+
+/* No comment provided by engineer. */
+"Current Beta Scope" = "当前 Beta 范围";
+
+/* No comment provided by engineer. */
+"Current source: %@" = "当前来源：%@";
+
+/* No comment provided by engineer. */
+"CURRENT STATE" = "当前状态";
+
+/* No comment provided by engineer. */
+"CURRENT STATE (live)" = "当前状态（实时）";
+
+/* No comment provided by engineer. */
+"Current State Unavailable" = "当前状态不可用";
+
+/* No comment provided by engineer. */
+"Cursor" = "Cursor";
+
+/* No comment provided by engineer. */
+"Cursor CLI not found" = "未找到 Cursor CLI";
+
+/* No comment provided by engineer. */
+"Custom" = "自定义";
+
+/* No comment provided by engineer. */
+"Custom path (optional)" = "自定义路径（可选）";
+
+/* No comment provided by engineer. */
+"Custom root (leave empty for default)" = "自定义根目录（留空则使用默认值）";
+
+/* No comment provided by engineer. */
+"Custom..." = "自定义...";
+
+/* No comment provided by engineer. */
+"Dark Mode" = "深色模式";
+
+/* No comment provided by engineer. */
+"Data is old. Check manually for latest" = "数据较旧，请手动检查最新情况";
+
+/* No comment provided by engineer. */
+"Date" = "日期";
+
+/* No comment provided by engineer. */
+"Date Range" = "日期范围";
+
+/* No comment provided by engineer. */
+"DAY PATTERNS" = "日期模式";
+
+/* No comment provided by engineer. */
+"Decrease Text Size" = "缩小文字";
+
+/* No comment provided by engineer. */
+"Decrease text size (⌘−)" = "缩小文字（⌘−）";
+
+/* No comment provided by engineer. */
+"Default: ~/.claude" = "默认：~/.claude";
+
+/* No comment provided by engineer. */
+"Default: ~/.copilot/session-state" = "默认：~/.copilot/session-state";
+
+/* No comment provided by engineer. */
+"Default: ~/.factory/projects (best-effort)" = "默认：~/.factory/projects (best-effort)";
+
+/* No comment provided by engineer. */
+"Default: ~/.factory/sessions" = "默认：~/.factory/sessions";
+
+/* No comment provided by engineer. */
+"Default: ~/.gemini" = "默认：~/.gemini";
+
+/* No comment provided by engineer. */
+"Default: ~/.local/share/opencode/storage/session" = "默认：~/.local/share/opencode/storage/session";
+
+/* No comment provided by engineer. */
+"Default: $CODEX_HOME/active or ~/.codex/active" = "默认：$CODEX_HOME/active or ~/.codex/active";
+
+/* No comment provided by engineer. */
+"Default: $CODEX_HOME/sessions or ~/.codex/sessions" = "默认：$CODEX_HOME/sessions or ~/.codex/sessions";
+
+/* No comment provided by engineer. */
+"Default: $OPENCLAW_STATE_DIR, ~/.openclaw, or ~/.clawdbot" = "默认：$OPENCLAW_STATE_DIR, ~/.openclaw, or ~/.clawdbot";
+
+/* No comment provided by engineer. */
+"Delete" = "删除";
+
+/* No comment provided by engineer. */
+"Delete all queued crash reports from local storage." = "删除本地存储中所有排队待处理的崩溃报告。";
+
+/* No comment provided by engineer. */
+"Delete Claude Probe Sessions Now?" = "现在删除 Claude 探测会话吗？";
+
+/* No comment provided by engineer. */
+"Delete Codex probe sessions now" = "立即删除 Codex 探测会话";
+
+/* No comment provided by engineer. */
+"Delete Codex Probe Sessions Now?" = "现在删除 Codex 探测会话吗？";
+
+/* No comment provided by engineer. */
+"Delete Saved Copies?" = "删除已保存副本？";
+
+/* No comment provided by engineer. */
+"Delete Saved Copies…" = "删除已保存副本…";
+
+/* No comment provided by engineer. */
+"deleted" = "已删除";
+
+/* No comment provided by engineer. */
+"Deleted session" = "已删除会话";
+
+/* No comment provided by engineer. */
+"Detected Codex %@" = "检测到 Codex %@";
+
+/* No comment provided by engineer. */
+"Detected:" = "检测到：";
+
+/* No comment provided by engineer. */
+"Directory Not Found" = "未找到目录";
+
+/* No comment provided by engineer. */
+"Disabled agents are hidden across the app and background work is paused." = "已禁用的 Agent 会在整个应用中隐藏，后台处理也会暂停。";
+
+/* No comment provided by engineer. */
+"Dismiss" = "关闭";
+
+/* No comment provided by engineer. */
+"Dismiss %@ notification" = "关闭 %@ 通知";
+
+/* No comment provided by engineer. */
+"Dismiss preferences without additional changes" = "关闭设置，不再做额外更改";
+
+/* No comment provided by engineer. */
+"Displays iTerm tab title as a muted subtitle under the agent label in full Agent Cockpit rows. Long titles are truncated with hover tooltips." = "在完整的 Agent 控制台行中，将 iTerm 标签页标题作为低调的副标题显示在智能体名称下方。较长标题会被截断，并在悬停时显示完整提示。";
+
+/* No comment provided by engineer. */
+"Done" = "完成";
+
+/* No comment provided by engineer. */
+"Download from claude.ai/download or install via npm: npm install -g @anthropic/claude-cli" = "可从 claude.ai/download 下载，或通过 npm 安装：npm install -g @anthropic/claude-cli";
+
+/* No comment provided by engineer. */
+"Droid" = "Droid";
+
+/* No comment provided by engineer. */
+"Droid CLI not found" = "未找到 Droid CLI";
+
+/* No comment provided by engineer. */
+"Droid Only" = "Droid Only";
+
+/* No comment provided by engineer. */
+"Efficiency" = "效率";
+
+/* No comment provided by engineer. */
+"Email Crash Report" = "通过邮件发送崩溃报告";
+
+/* No comment provided by engineer. */
+"Embedded" = "内嵌";
+
+/* No comment provided by engineer. */
+"Enable" = "启用";
+
+/* No comment provided by engineer. */
+"Enable %@" = "启用 %@";
+
+/* No comment provided by engineer. */
+"Enable Anyway" = "仍然启用";
+
+/* No comment provided by engineer. */
+"Enable Automatic Cleanup?" = "启用自动清理？";
+
+/* No comment provided by engineer. */
+"Enable file-link click targets in transcript" = "在转录中启用文件链接点击跳转";
+
+/* No comment provided by engineer. */
+"Enable live session detection + Cockpit (Beta)" = "启用实时会话检测 + Cockpit（Beta）";
+
+/* No comment provided by engineer. */
+"Enable Live sessions + Cockpit (Beta) in Settings → Agent Cockpit." = "请在“设置 → Agent 控制台”中启用“实时会话 + Cockpit（Beta）”。";
+
+/* No comment provided by engineer. */
+"Enable review cards for Codex internal review JSON" = "为 Codex 内部审查 JSON 启用摘要卡片";
+
+/* No comment provided by engineer. */
+"Enable the experimental Claude usage tracker despite the warning" = "忽略警告，仍启用实验性的 Claude 用量跟踪器";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom Claude CLI binary" = "输入自定义Claude CLI binary的完整路径";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom Codex binary" = "输入自定义Codex binary的完整路径";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom Cursor CLI binary" = "输入自定义Cursor CLI binary的完整路径";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom Droid CLI binary" = "输入自定义Droid CLI binary的完整路径";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom Gemini CLI binary" = "输入自定义Gemini CLI binary的完整路径";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom GitHub Copilot CLI binary" = "输入自定义GitHub Copilot CLI binary的完整路径";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom OpenClaw (or clawdbot) binary" = "输入自定义OpenClaw (or clawdbot) binary的完整路径";
+
+/* No comment provided by engineer. */
+"Enter the full path to a custom OpenCode CLI binary" = "输入自定义OpenCode CLI binary的完整路径";
+
+/* No comment provided by engineer. */
+"Error" = "错误";
+
+/* No comment provided by engineer. */
+"esc" = "esc";
+
+/* No comment provided by engineer. */
+"Exclude sessions that contain no assistant output and no meaningful prompt content (for example Codex rollouts that only captured preamble, or Claude local-command-only transcripts)" = "排除既没有助手输出、也没有有效提示内容的会话（例如只记录了前言的 Codex rollout，或只包含本地命令的 Claude 转录）。";
+
+/* No comment provided by engineer. */
+"Exclude sessions that contain no recorded tool/command calls. Strict: Claude/Gemini are excluded unless tool calls are present in the parsed transcript." = "排除没有记录任何工具/命令调用的会话。严格模式下，Claude/Gemini 只有在解析后的转录中包含工具调用时才会保留。";
+
+/* No comment provided by engineer. */
+"Exclude sessions that contain no user or assistant messages" = "排除没有用户消息或助手消息的会话";
+
+/* No comment provided by engineer. */
+"Exclude sessions with only one or two messages (but keep 0-message sessions unless also excluded above)" = "排除只包含 1 到 2 条消息的会话（但若未被上方规则排除，则仍保留 0 消息会话）。";
+
+/* No comment provided by engineer. */
+"Explore your OpenClaw conversations" = "浏览你的 OpenClaw 对话";
+
+/* No comment provided by engineer. */
+"Export" = "导出";
+
+/* No comment provided by engineer. */
+"Export + Open GitHub Issue" = "导出并打开 GitHub Issue";
+
+/* No comment provided by engineer. */
+"Export Failed" = "导出失败";
+
+/* No comment provided by engineer. */
+"Export Report" = "导出报告";
+
+/* No comment provided by engineer. */
+"Export the most recent queued crash report as JSON." = "将最近一份待处理的崩溃报告导出为 JSON。";
+
+/* No comment provided by engineer. */
+"Export Transcript" = "导出转录";
+
+/* No comment provided by engineer. */
+"Export transcript as Markdown" = "将转录导出为 Markdown";
+
+/* No comment provided by engineer. */
+"F" = "F";
+
+/* No comment provided by engineer. */
+"Falling back to experimental resume flag" = "正在回退到实验性恢复标志";
+
+/* No comment provided by engineer. */
+"Fill out the short feedback form" = "填写简短反馈表";
+
+/* No comment provided by engineer. */
+"Filter by Project" = "按项目筛选";
+
+/* No comment provided by engineer. */
+"Filter by Project: %@" = "按项目筛选：%@";
+
+/* No comment provided by engineer. */
+"Find" = "查找";
+
+/* No comment provided by engineer. */
+"Find in session" = "在会话中查找";
+
+/* No comment provided by engineer. */
+"Find in session (⌘F)" = "在会话中查找（⌘F）";
+
+/* No comment provided by engineer. */
+"Find in Transcript…" = "在转录中查找…";
+
+/* No comment provided by engineer. */
+"First User Prompt" = "第一条用户提示";
+
+/* No comment provided by engineer. */
+"Flat session list (⇧⌘H)" = "平铺会话列表（⇧⌘H）";
+
+/* No comment provided by engineer. */
+"Focus" = "聚焦";
+
+/* No comment provided by engineer. */
+"Focus in iTerm2" = "在 iTerm2 中聚焦";
+
+/* No comment provided by engineer. */
+"Focus is unavailable for this terminal session." = "此终端会话当前无法聚焦。";
+
+/* No comment provided by engineer. */
+"Focus the existing iTerm2 tab/window for this session." = "聚焦到该会话当前所在的 iTerm2 标签页或窗口。";
+
+/* No comment provided by engineer. */
+"Folder does not exist or is not a directory." = "文件夹不存在，或该路径不是目录。";
+
+/* No comment provided by engineer. */
+"Gemini" = "Gemini";
+
+/* No comment provided by engineer. */
+"Gemini CLI" = "Gemini CLI";
+
+/* No comment provided by engineer. */
+"Gemini CLI not found" = "未找到 Gemini CLI";
+
+/* No comment provided by engineer. */
+"Gemini Only" = "Gemini Only";
+
+/* No comment provided by engineer. */
+"General" = "常规";
+
+/* No comment provided by engineer. */
+"Git Context" = "Git 上下文";
+
+/* No comment provided by engineer. */
+"Git Context Inspector is currently only available for Codex sessions. Support for other agents coming soon." = "Git 上下文检查器目前仅适用于 Codex 会话，其他智能体的支持后续会补上。";
+
+/* No comment provided by engineer. */
+"Git Information Not Available" = "Git 信息不可用";
+
+/* No comment provided by engineer. */
+"Git Inspector: Codex Only" = "Git 检查器：仅支持 Codex";
+
+/* No comment provided by engineer. */
+"Git State Changed" = "Git 状态已更改";
+
+/* No comment provided by engineer. */
+"Git state changed - resume with caution" = "Git 状态已变化，请谨慎恢复";
+
+/* No comment provided by engineer. */
+"GitHub Copilot CLI" = "GitHub Copilot CLI";
+
+/* No comment provided by engineer. */
+"GitHub Copilot CLI not found" = "未找到 GitHub Copilot CLI";
+
+/* No comment provided by engineer. */
+"github.com/jazzyalex/agent-sessions" = "github.com/jazzyalex/agent-sessions";
+
+/* No comment provided by engineer. */
+"Go to Session" = "前往会话";
+
+/* No comment provided by engineer. */
+"Group sessions by project." = "按项目对会话分组。";
+
+/* No comment provided by engineer. */
+"Help improve Agent Sessions" = "帮助改进 Agent Sessions";
+
+/* No comment provided by engineer. */
+"Hide %@" = "隐藏 %@";
+
+/* No comment provided by engineer. */
+"Hide 0-message sessions" = "隐藏 0 消息会话";
+
+/* No comment provided by engineer. */
+"Hide 1–2 message sessions" = "隐藏 1–2 条消息的会话";
+
+/* No comment provided by engineer. */
+"Hide Dock icon" = "隐藏 Dock 图标";
+
+/* No comment provided by engineer. */
+"Hide housekeeping-only sessions" = "隐藏仅包含整理性操作的会话";
+
+/* No comment provided by engineer. */
+"Hide Images" = "隐藏图片";
+
+/* No comment provided by engineer. */
+"Hide sessions without tool calls (strict)" = "隐藏没有工具调用的会话（严格）";
+
+/* No comment provided by engineer. */
+"Historical metadata was not captured in this session." = "此会话未捕获历史元数据。";
+
+/* No comment provided by engineer. */
+"How often to refresh Claude usage (applies to tmux path; OAuth always refreshes every 60s)" = "Claude 用量刷新频率（仅适用于 tmux 路径；OAuth 固定每 60 秒刷新一次）";
+
+/* No comment provided by engineer. */
+"How often to refresh Codex usage" = "Codex 用量刷新频率";
+
+/* No comment provided by engineer. */
+"ID %@" = "ID %@";
+
+/* No comment provided by engineer. */
+"ID Copied!" = "ID 已复制！";
+
+/* No comment provided by engineer. */
+"If Agent Sessions helps your workflow, a GitHub star helps more people discover the project." = "如果 Agent Sessions 对你的工作流有帮助，欢迎在 GitHub 上点个 Star，让更多人发现这个项目。";
+
+/* No comment provided by engineer. */
+"If Agent Sessions is part of your regular workflow, consider a small pledge to help fund ongoing development." = "如果 Agent Sessions 已成为你日常工作流的一部分，可以考虑小额赞助，支持项目持续开发。";
+
+/* No comment provided by engineer. */
+"If resume fails, try continue in working directory" = "如果恢复失败，可尝试在工作目录中使用 continue";
+
+/* No comment provided by engineer. */
+"Ignore Codex Agents.md instructions and Claude local-command caveats when deriving titles and jumping to the first prompt (content remains visible)" = "在推导标题和跳转到第一条提示时，忽略 Codex 的 Agents.md 指令及 Claude 本地命令相关限制说明（内容仍然可见）。";
+
+/* No comment provided by engineer. */
+"Image" = "图片";
+
+/* No comment provided by engineer. */
+"Image Browser" = "图片浏览器";
+
+/* No comment provided by engineer. */
+"Images %@" = "图片 %@";
+
+/* No comment provided by engineer. */
+"Import and search your Cursor AI sessions" = "导入并搜索你的 Cursor AI 会话";
+
+/* No comment provided by engineer. */
+"Inactive" = "未激活";
+
+/* No comment provided by engineer. */
+"Include large tool outputs in global search" = "在全局搜索中包含大型工具输出";
+
+/* No comment provided by engineer. */
+"Increase Text Size" = "放大文字";
+
+/* No comment provided by engineer. */
+"Increase text size (⌘+)" = "放大文字（⌘+）";
+
+/* No comment provided by engineer. */
+"Index failed." = "索引失败。";
+
+/* No comment provided by engineer. */
+"Index full tool I/O for recent sessions" = "为最近会话索引完整工具 I/O";
+
+/* No comment provided by engineer. */
+"Indexed date range: %@ to %@" = "已索引日期范围：%@ 至 %@";
+
+/* No comment provided by engineer. */
+"Indexing images…" = "正在索引图片…";
+
+/* No comment provided by engineer. */
+"Indexing selected session…" = "正在索引所选会话…";
+
+/* No comment provided by engineer. */
+"INSIGHTS" = "洞察";
+
+/* No comment provided by engineer. */
+"Insights & Patterns" = "洞察与模式";
+
+/* No comment provided by engineer. */
+"Install Cursor Agent from cursor.com/download and ensure `cursor` is on PATH." = "从 cursor.com/download 安装 Cursor Agent，并确保 `cursor` 已加入 PATH。";
+
+/* No comment provided by engineer. */
+"Install Droid (Factory CLI) and ensure `droid` is available on your PATH, or set a custom binary path here." = "安装 Droid（Factory CLI），并确保 `droid` 已加入 PATH；或者在这里指定自定义可执行文件路径。";
+
+/* No comment provided by engineer. */
+"Install OpenClaw (or clawdbot) and ensure `openclaw`/`clawdbot` is available on PATH, or set a custom binary path." = "安装 OpenClaw（或 clawdbot），并确保 `openclaw` / `clawdbot` 已加入 PATH；或者设置自定义可执行文件路径。";
+
+/* No comment provided by engineer. */
+"Install via Homebrew or download from GitHub Copilot CLI releases." = "通过 Homebrew 安装，或从 GitHub Copilot CLI 的 Releases 页面下载。";
+
+/* No comment provided by engineer. */
+"Install via npm: npm install -g @openai/codex-cli" = "通过 npm 安装：npm install -g @openai/codex-cli";
+
+/* No comment provided by engineer. */
+"Install via pip: pip install opencode-ai" = "通过 pip 安装：pip install opencode-ai";
+
+/* No comment provided by engineer. */
+"Instantly refresh Claude usage data. Note: probing launches Claude Code and may count toward Claude Code usage limits." = "立即刷新 Claude 用量数据。注意：探测会启动 Claude Code，并可能计入 Claude Code 的用量限制。";
+
+/* No comment provided by engineer. */
+"Invalid Copilot binary path." = "Copilot 可执行文件路径无效。";
+
+/* No comment provided by engineer. */
+"Invalid Cursor binary path." = "Cursor 可执行文件路径无效。";
+
+/* No comment provided by engineer. */
+"iTerm2" = "iTerm2";
+
+/* No comment provided by engineer. */
+"jazzyalex.github.io/agent-sessions" = "jazzyalex.github.io/agent-sessions";
+
+/* No comment provided by engineer. */
+"jazzyalex@gmail.com" = "jazzyalex@gmail.com";
+
+/* No comment provided by engineer. */
+"JSON" = "JSON";
+
+/* No comment provided by engineer. */
+"JSON (legacy)" = "JSON（旧版）";
+
+/* No comment provided by engineer. */
+"JSON view — formatted session JSON for readability. Encrypted blobs and large text blocks are summarized; use the session file on disk for raw JSON." = "JSON 视图：将会话 JSON 格式化后展示，便于阅读。加密数据块和大段文本会做摘要处理；如需原始 JSON，请直接查看磁盘上的会话文件。";
+
+/* No comment provided by engineer. */
+"Jump to latest output" = "跳转到最新输出";
+
+/* No comment provided by engineer. */
+"just now" = "刚刚";
+
+/* No comment provided by engineer. */
+"Keep Claude usage tracking disabled" = "保持 Claude 用量跟踪为关闭状态";
+
+/* No comment provided by engineer. */
+"KEY INSIGHTS" = "关键洞察";
+
+/* No comment provided by engineer. */
+"Large" = "大";
+
+/* No comment provided by engineer. */
+"Last 7 days" = "最近 7 天";
+
+/* No comment provided by engineer. */
+"Last 7 Days" = "最近 7 天";
+
+/* No comment provided by engineer. */
+"Last 30 Days" = "最近 30 天";
+
+/* No comment provided by engineer. */
+"Last 90 Days" = "最近 90 天";
+
+/* No comment provided by engineer. */
+"Last checked: %@" = "上次检查：%@";
+
+/* No comment provided by engineer. */
+"Last Sync" = "上次同步";
+
+/* No comment provided by engineer. */
+"Last updated %@" = "上次更新 %@";
+
+/* No comment provided by engineer. */
+"Last updated: %@" = "上次更新：%@";
+
+/* No comment provided by engineer. */
+"Last User Prompt" = "最后一条用户提示";
+
+/* No comment provided by engineer. */
+"Later" = "稍后";
+
+/* No comment provided by engineer. */
+"Launch Codex with -c experimental_resume=<path> instead of resume <id>." = "使用 `-c experimental_resume=<path>` 启动 Codex，而不是 `resume <id>`。";
+
+/* No comment provided by engineer. */
+"Launch Mode" = "启动方式";
+
+/* No comment provided by engineer. */
+"left" = "剩余";
+
+/* No comment provided by engineer. */
+"Left % (Codex-style)" = "剩余额度 %（Codex 风格）";
+
+/* No comment provided by engineer. */
+"Light Mode" = "浅色模式";
+
+/* No comment provided by engineer. */
+"Limit tracking syncs with your terminal. Toggle off anytime in Settings." = "额度跟踪会与你的终端保持同步。你可以随时在“设置”中将其关闭。";
+
+/* No comment provided by engineer. */
+"Live" = "实时";
+
+/* No comment provided by engineer. */
+"Live detection is currently limited to " = "当前实时检测仅支持 ";
+
+/* No comment provided by engineer. */
+"Live sessions + Cockpit (Beta) is disabled in Settings → Agent Cockpit." = "“实时会话 + 控制台（Beta）”已在“设置 → Agent 控制台”中被禁用。";
+
+/* No comment provided by engineer. */
+"Live sessions only" = "仅实时会话";
+
+/* No comment provided by engineer. */
+"Loading analytics..." = "正在加载分析数据...";
+
+/* No comment provided by engineer. */
+"Loading current git status..." = "正在加载当前 Git 状态...";
+
+/* No comment provided by engineer. */
+"Loading preview…" = "正在加载预览…";
+
+/* No comment provided by engineer. */
+"Loading transcript" = "正在加载转录";
+
+/* No comment provided by engineer. */
+"Locate…" = "定位…";
+
+/* No comment provided by engineer. */
+"Login required" = "需要登录";
+
+/* No comment provided by engineer. */
+"M" = "M";
+
+/* No comment provided by engineer. */
+"Major Changes Detected" = "检测到重大变化";
+
+/* No comment provided by engineer. */
+"May count toward Claude Code usage limits" = "可能计入 Claude Code 用量限制";
+
+/* No comment provided by engineer. */
+"Medium" = "中";
+
+/* No comment provided by engineer. */
+"Menu Bar" = "菜单栏";
+
+/* No comment provided by engineer. */
+"Message counts" = "消息数";
+
+/* No comment provided by engineer. */
+"messages" = "消息";
+
+/* No comment provided by engineer. */
+"Messages" = "消息";
+
+/* No comment provided by engineer. */
+"MIT License" = "MIT 许可证";
+
+/* No comment provided by engineer. */
+"Modified date" = "修改日期";
+
+/* No comment provided by engineer. */
+"Monochrome" = "单色";
+
+/* No comment provided by engineer. */
+"Most Active: %@" = "最活跃：%@";
+
+/* No comment provided by engineer. */
+"Msgs" = "消息";
+
+/* No comment provided by engineer. */
+"Msgs/Session" = "每会话消息数";
+
+/* No comment provided by engineer. */
+"Must be an executable file" = "必须是可执行文件";
+
+/* No comment provided by engineer. */
+"Must be an executable file." = "必须是可执行文件。";
+
+/* No comment provided by engineer. */
+"Name" = "名称";
+
+/* No comment provided by engineer. */
+"Navigate to Session" = "前往会话";
+
+/* No comment provided by engineer. */
+"Never" = "从不";
+
+/* No comment provided by engineer. */
+"Next image prompt" = "下一张图片提示";
+
+/* No comment provided by engineer. */
+"Next match (⌘G)" = "下一处匹配（⌘G）";
+
+/* No comment provided by engineer. */
+"Next Unified Search match (⌘G)" = "统一搜索下一处匹配（⌘G）";
+
+/* No comment provided by engineer. */
+"No Agents" = "没有 Agent";
+
+/* No comment provided by engineer. */
+"No Codex sessions available. Refresh the index in the main window." = "当前没有可用的 Codex 会话。请在主窗口中刷新索引。";
+
+/* No comment provided by engineer. */
+"No data" = "无数据";
+
+/* No comment provided by engineer. */
+"No delete" = "不删除";
+
+/* No comment provided by engineer. */
+"No exact session match found — only a working-directory fallback is available." = "没有找到精确匹配的会话，只能回退到基于工作目录的恢复方式。";
+
+/* No comment provided by engineer. */
+"No images found" = "未找到图片";
+
+/* No comment provided by engineer. */
+"No new" = "无新内容";
+
+/* No comment provided by engineer. */
+"No session" = "没有会话";
+
+/* No comment provided by engineer. */
+"No sessions" = "没有会话";
+
+/* No comment provided by engineer. */
+"No sessions yet" = "还没有会话";
+
+/* No comment provided by engineer. */
+"None" = "无";
+
+/* No comment provided by engineer. */
+"Not captured" = "未捕获";
+
+/* No comment provided by engineer. */
+"Not found" = "未找到";
+
+/* No comment provided by engineer. */
+"Numbers only" = "仅数字";
+
+/* No comment provided by engineer. */
+"Off" = "关闭";
+
+/* No comment provided by engineer. */
+"OK" = "确定";
+
+/* No comment provided by engineer. */
+"On" = "开启";
+
+/* No comment provided by engineer. */
+"Open a pre-filled email draft with the latest crash report in the message body." = "打开一封已预填内容的邮件草稿，并将最新崩溃报告放入正文。";
+
+/* No comment provided by engineer. */
+"Open Agent Cockpit." = "打开 Agent 控制台。";
+
+/* No comment provided by engineer. */
+"Open Agent Sessions" = "打开 Agent Sessions";
+
+/* No comment provided by engineer. */
+"Open Codex in iTerm2 and continue the session there." = "在 iTerm2 中打开 Codex，并在其中继续该会话。";
+
+/* No comment provided by engineer. */
+"Open Codex in Terminal.app and continue the session there." = "在 Terminal.app 中打开 Codex，并在其中继续该会话。";
+
+/* No comment provided by engineer. */
+"Open Directory" = "打开目录";
+
+/* No comment provided by engineer. */
+"Open Full Disk Access Settings" = "打开“完全磁盘访问权限”设置";
+
+/* No comment provided by engineer. */
+"Open in Finder" = "在 Finder 中打开";
+
+/* No comment provided by engineer. */
+"Open in Image Browser" = "在图片浏览器中打开";
+
+/* No comment provided by engineer. */
+"Open in Preview" = "在预览中打开";
+
+/* No comment provided by engineer. */
+"Open Preferences…" = "打开设置…";
+
+/* No comment provided by engineer. */
+"Open the default email app with a pre-filled crash report draft." = "使用默认邮件应用打开一封已预填崩溃报告的草稿。";
+
+/* No comment provided by engineer. */
+"Open the working directory in Finder." = "在 Finder 中打开工作目录。";
+
+/* No comment provided by engineer. */
+"Open Working Directory" = "打开工作目录";
+
+/* No comment provided by engineer. */
+"Open working directory in Finder" = "在 Finder 中打开工作目录";
+
+/* No comment provided by engineer. */
+"OpenClaw" = "OpenClaw";
+
+/* No comment provided by engineer. */
+"OpenClaw auto-deletes sessions after 30 days. Shown by default with a 'deleted' badge. Disable to hide them." = "OpenClaw 会在 30 天后自动删除会话。默认会带“deleted”标记显示；关闭后可将其隐藏。";
+
+/* No comment provided by engineer. */
+"OpenClaw CLI not found" = "未找到 OpenClaw CLI";
+
+/* No comment provided by engineer. */
+"OpenClaw Only" = "OpenClaw Only";
+
+/* No comment provided by engineer. */
+"OpenCode" = "OpenCode";
+
+/* No comment provided by engineer. */
+"OpenCode CLI not found" = "未找到 OpenCode CLI";
+
+/* No comment provided by engineer. */
+"OpenCode Only" = "OpenCode Only";
+
+/* No comment provided by engineer. */
+"Optional binary path (for Cursor/VS Code)" = "可选的可执行文件路径（适用于 Cursor / VS Code）";
+
+/* No comment provided by engineer. */
+"Optional override for the editor CLI binary used for line-targeted opens." = "用于按行打开文件时的编辑器 CLI 可执行文件覆盖路径（可选）。";
+
+/* No comment provided by engineer. */
+"Override the Claude sessions directory. Leave blank to use the default location" = "覆盖Claude会话目录；留空则使用默认位置";
+
+/* No comment provided by engineer. */
+"Override the Codex sessions directory. Leave blank to use the default location" = "覆盖Codex会话目录；留空则使用默认位置";
+
+/* No comment provided by engineer. */
+"Override the default ~/.cursor path. Most users should leave this empty." = "覆盖默认的 ~/.cursor 路径。多数用户应保持留空。";
+
+/* No comment provided by engineer. */
+"Override the directory used for active-session presence files. Leave blank to use $CODEX_HOME/active or ~/.codex/active." = "覆盖存放活跃会话 presence 文件的目录。留空则使用 $CODEX_HOME/active 或 ~/.codex/active。";
+
+/* No comment provided by engineer. */
+"Override the Gemini sessions directory. Leave blank to use the default location" = "覆盖Gemini会话目录；留空则使用默认位置";
+
+/* No comment provided by engineer. */
+"Override the OpenCode sessions directory. Leave blank to use the default location" = "覆盖OpenCode会话目录；留空则使用默认位置";
+
+/* No comment provided by engineer. */
+"Override where Agent Sessions scans for Copilot session-state JSONL files" = "覆盖 Agent Sessions 扫描 Copilot session-state JSONL 文件的位置";
+
+/* No comment provided by engineer. */
+"Override where Agent Sessions scans for Droid interactive session JSONL files" = "覆盖 Agent Sessions 扫描 Droid 交互式会话 JSONL 文件的位置";
+
+/* No comment provided by engineer. */
+"Override where Agent Sessions scans for OpenClaw and clawdbot transcripts" = "覆盖 Agent Sessions 扫描 OpenClaw 和 clawdbot 转录文件的位置";
+
+/* No comment provided by engineer. */
+"Path must point to an existing folder" = "路径必须指向一个已存在的文件夹";
+
+/* No comment provided by engineer. */
+"PATTERNS" = "模式";
+
+/* No comment provided by engineer. */
+"Pick a folder to scan for Copilot sessions" = "选择用于扫描Copilot sessions的文件夹";
+
+/* No comment provided by engineer. */
+"Pick a folder to scan for Droid sessions" = "选择用于扫描Droid sessions的文件夹";
+
+/* No comment provided by engineer. */
+"Pick a folder to scan for OpenClaw sessions" = "选择用于扫描OpenClaw sessions的文件夹";
+
+/* No comment provided by engineer. */
+"Pick a projects folder to scan for stream-json logs" = "选择一个项目文件夹，用于扫描 stream-json 日志";
+
+/* No comment provided by engineer. */
+"Pick a session to reopen in Codex CLI" = "选择一个会话以在 Codex CLI 中重新打开";
+
+/* No comment provided by engineer. */
+"Pin — keep above all windows" = "置顶：保持在所有窗口之上";
+
+/* No comment provided by engineer. */
+"Preferences" = "设置";
+
+/* No comment provided by engineer. */
+"Preparing..." = "准备中...";
+
+/* No comment provided by engineer. */
+"Pretty" = "格式化";
+
+/* No comment provided by engineer. */
+"Previous image prompt" = "上一张图片提示";
+
+/* No comment provided by engineer. */
+"Previous match (⇧⌘G)" = "上一处匹配（⇧⌘G）";
+
+/* No comment provided by engineer. */
+"Previous Unified Search match (⇧⌘G)" = "统一搜索上一处匹配（⇧⌘G）";
+
+/* No comment provided by engineer. */
+"Probe sessions are short /usage checks created by Agent Sessions in a dedicated Claude project. This cleanup only removes that probe project after validation, and never touches your normal Claude sessions." = "探测会话是 Agent Sessions 在专用 Claude 项目中创建的简短 /usage 检查。本清理操作只会在验证通过后删除该探测项目，绝不会动到你的正常 Claude 会话。";
+
+/* No comment provided by engineer. */
+"Project" = "项目";
+
+/* No comment provided by engineer. */
+"Project names" = "项目名称";
+
+/* No comment provided by engineer. */
+"Project:" = "项目：";
+
+/* No comment provided by engineer. */
+"Query the currently detected Codex binary for its version" = "查询当前检测到的 Codex 可执行文件版本";
+
+/* No comment provided by engineer. */
+"Query the detected Claude CLI for its version" = "查询检测到的Claude CLI版本";
+
+/* No comment provided by engineer. */
+"Query the detected Copilot CLI for its version" = "查询检测到的Copilot CLI版本";
+
+/* No comment provided by engineer. */
+"Query the detected Cursor CLI for its version" = "查询检测到的Cursor CLI版本";
+
+/* No comment provided by engineer. */
+"Query the detected Droid CLI for its version" = "查询检测到的Droid CLI版本";
+
+/* No comment provided by engineer. */
+"Query the detected Gemini CLI for its version" = "查询检测到的Gemini CLI版本";
+
+/* No comment provided by engineer. */
+"Query the detected OpenClaw CLI for its version" = "查询检测到的OpenClaw CLI版本";
+
+/* No comment provided by engineer. */
+"Query the detected OpenCode CLI for its version" = "查询检测到的OpenCode CLI版本";
+
+/* No comment provided by engineer. */
+"Raw JSON" = "原始 JSON";
+
+/* No comment provided by engineer. */
+"Re-query git for latest status" = "重新查询 Git 以获取最新状态";
+
+/* No comment provided by engineer. */
+"Re-scan" = "重新扫描";
+
+/* No comment provided by engineer. */
+"Ready" = "就绪";
+
+/* No comment provided by engineer. */
+"Rebuild" = "重建";
+
+/* No comment provided by engineer. */
+"Rebuild Core Index?" = "重建核心索引？";
+
+/* No comment provided by engineer. */
+"Rebuild Core Index…" = "重建核心索引…";
+
+/* No comment provided by engineer. */
+"RECOMMENDATION" = "建议";
+
+/* No comment provided by engineer. */
+"Reduce transparency" = "降低透明度";
+
+/* No comment provided by engineer. */
+"Refresh" = "刷新";
+
+/* No comment provided by engineer. */
+"Refresh active sessions and session indexes now." = "立即刷新活跃会话和会话索引。";
+
+/* No comment provided by engineer. */
+"Refresh analytics view" = "刷新分析视图";
+
+/* No comment provided by engineer. */
+"Refresh Claude usage now" = "立即刷新 Claude 用量";
+
+/* No comment provided by engineer. */
+"Refresh Limits" = "刷新额度";
+
+/* No comment provided by engineer. */
+"Refresh now" = "立即刷新";
+
+/* No comment provided by engineer. */
+"Refresh Status" = "刷新状态";
+
+/* No comment provided by engineer. */
+"Refresh unavailable" = "当前无法刷新";
+
+/* No comment provided by engineer. */
+"Refreshing..." = "正在刷新...";
+
+/* No comment provided by engineer. */
+"Remove" = "移除";
+
+/* No comment provided by engineer. */
+"Remove from Saved" = "从已保存中移除";
+
+/* No comment provided by engineer. */
+"Remove from Saved deletes local copy" = "从“已保存”中移除时会删除本地副本";
+
+/* No comment provided by engineer. */
+"Remove the custom binary override" = "移除自定义可执行文件覆盖路径";
+
+/* No comment provided by engineer. */
+"Remove the project filter and show all sessions" = "移除项目筛选并显示全部会话";
+
+/* No comment provided by engineer. */
+"Removes Agent Sessions from the Dock by switching the app to accessory activation mode. When enabled, Agent Sessions automatically keeps the menu bar item enabled so the app remains accessible." = "通过将应用切换为辅助激活模式，把 Agent Sessions 从 Dock 中移除。启用后，Agent Sessions 会自动保持菜单栏项目开启，以确保应用仍可访问。";
+
+/* No comment provided by engineer. */
+"Removes only Codex probe sessions after validation. If any session doesn’t look like a probe, nothing is deleted." = "仅在验证通过后删除 Codex 探测会话。如果其中任何会话看起来不像探测会话，则不会删除任何内容。";
+
+/* No comment provided by engineer. */
+"Reopen from Help → Show Onboarding" = "可通过“帮助 → 显示引导”重新打开";
+
+/* No comment provided by engineer. */
+"Reset" = "重置";
+
+/* No comment provided by engineer. */
+"Reset All Preferences?" = "重置所有设置？";
+
+/* No comment provided by engineer. */
+"Reset times" = "重置时间";
+
+/* No comment provided by engineer. */
+"Reset to Defaults" = "恢复默认值";
+
+/* No comment provided by engineer. */
+"resets" = "重置于";
+
+/* No comment provided by engineer. */
+"Resume" = "恢复";
+
+/* No comment provided by engineer. */
+"Resume Anyway" = "仍然恢复";
+
+/* No comment provided by engineer. */
+"Resume Health Check" = "恢复健康检查";
+
+/* No comment provided by engineer. */
+"Resume in %@ (%@)" = "在 %@ 中恢复（%@）";
+
+/* No comment provided by engineer. */
+"Resume in Codex" = "在 Codex 中恢复";
+
+/* No comment provided by engineer. */
+"Resume Log" = "恢复日志";
+
+/* No comment provided by engineer. */
+"RESUME SAFETY CHECK" = "恢复安全检查";
+
+/* No comment provided by engineer. */
+"Resume Session" = "恢复会话";
+
+/* No comment provided by engineer. */
+"Resume the selected session in its original CLI (⌃⌘R)" = "在原始 CLI 中恢复所选会话（⌃⌘R）";
+
+/* No comment provided by engineer. */
+"Reveal" = "显示";
+
+/* No comment provided by engineer. */
+"Reveal internal probe sessions in the Cockpit HUD. Leave OFF for normal use to avoid noise." = "在 Cockpit HUD 中显示内部探测会话。正常使用时建议关闭，以免造成干扰。";
+
+/* No comment provided by engineer. */
+"Reveal Log" = "显示日志";
+
+/* No comment provided by engineer. */
+"Reveal probe sessions in the Sessions list. Leave OFF for normal use to avoid noise." = "在会话列表中显示探测会话。正常使用时建议关闭，以免造成干扰。";
+
+/* No comment provided by engineer. */
+"Reveal Session Log" = "显示会话日志";
+
+/* No comment provided by engineer. */
+"Reveal the detected Claude CLI binary in Finder" = "在 Finder 中显示检测到的Claude CLI binary";
+
+/* No comment provided by engineer. */
+"Reveal the detected Codex binary in Finder" = "在 Finder 中显示检测到的Codex binary";
+
+/* No comment provided by engineer. */
+"Reveal the detected Copilot CLI binary in Finder" = "在 Finder 中显示检测到的Copilot CLI binary";
+
+/* No comment provided by engineer. */
+"Reveal the detected Cursor CLI binary in Finder" = "在 Finder 中显示检测到的Cursor CLI binary";
+
+/* No comment provided by engineer. */
+"Reveal the detected Droid CLI binary in Finder" = "在 Finder 中显示检测到的Droid CLI binary";
+
+/* No comment provided by engineer. */
+"Reveal the detected Gemini CLI binary in Finder" = "在 Finder 中显示检测到的Gemini CLI binary";
+
+/* No comment provided by engineer. */
+"Reveal the detected OpenClaw binary in Finder" = "在 Finder 中显示检测到的OpenClaw binary";
+
+/* No comment provided by engineer. */
+"Reveal the detected OpenCode CLI binary in Finder" = "在 Finder 中显示检测到的OpenCode CLI binary";
+
+/* No comment provided by engineer. */
+"Reveal the session log in Finder." = "在 Finder 中显示会话日志。";
+
+/* No comment provided by engineer. */
+"Reveal working directory in Finder (⌘⇧O)" = "在 Finder 中显示工作目录（⌘⇧O）";
+
+/* No comment provided by engineer. */
+"Revert all preferences to their original values" = "将所有设置恢复为原始默认值";
+
+/* No comment provided by engineer. */
+"Review your OpenCode sessions" = "查看你的 OpenCode 会话";
+
+/* No comment provided by engineer. */
+"Run codex --version to confirm resume support" = "运行 `codex --version` 以确认是否支持恢复";
+
+/* No comment provided by engineer. */
+"Run Codex inside Agent Sessions and stream output here." = "在 Agent Sessions 内运行 Codex，并在此实时显示输出。";
+
+/* No comment provided by engineer. */
+"Run hard Codex /status probe now" = "立即执行强制 Codex /status 探测";
+
+/* No comment provided by engineer. */
+"Runs a one-off /status probe regardless of staleness or auto-probe setting, and shows the result." = "无论当前数据是否过期、自动探测是否开启，都会执行一次性 /status 探测，并显示结果。";
+
+/* No comment provided by engineer. */
+"Runs lightweight terminal-based probes in dedicated working folders to refresh usage limits. Probe sessions are auto-generated /usage checks stored in a separate Claude project. Cleanup only removes validated probe sessions; your normal sessions are never touched." = "在专用工作目录中执行轻量级、基于终端的探测，以刷新用量额度。探测会话是自动生成的 /usage 检查，并存放在独立的 Claude 项目中。清理操作只会删除经验证的探测会话，绝不会触碰你的正常会话。";
+
+/* No comment provided by engineer. */
+"s" = "s";
+
+/* No comment provided by engineer. */
+"S" = "S";
+
+/* No comment provided by engineer. */
+"SAFE" = "安全";
+
+/* No comment provided by engineer. */
+"Safe to resume" = "可以安全恢复";
+
+/* No comment provided by engineer. */
+"Safe to Resume" = "可以安全恢复";
+
+/* No comment provided by engineer. */
+"Same" = "相同";
+
+/* No comment provided by engineer. */
+"Save" = "保存";
+
+/* No comment provided by engineer. */
+"Save also keeps locally" = "保存时也保留本地副本";
+
+/* No comment provided by engineer. */
+"Save to Downloads" = "保存到下载文件夹";
+
+/* No comment provided by engineer. */
+"Save…" = "保存…";
+
+/* No comment provided by engineer. */
+"Saved" = "已保存";
+
+/* No comment provided by engineer. */
+"Saved Only" = "仅已保存";
+
+/* No comment provided by engineer. */
+"Saved Sessions" = "已保存会话";
+
+/* No comment provided by engineer. */
+"Saving…" = "保存中…";
+
+/* No comment provided by engineer. */
+"Scope" = "范围";
+
+/* No comment provided by engineer. */
+"Search" = "搜索";
+
+/* No comment provided by engineer. */
+"Search sessions (⌥⌘F)" = "搜索会话（⌥⌘F）";
+
+/* No comment provided by engineer. */
+"Search sessions (⌥⌘F). Filters: repo:NAME, path:PATH. Use quotes for phrases; escape \" and \\. Press Return for full deep scan." = "搜索会话（⌥⌘F）。筛选器：repo:NAME、path:PATH。短语请使用引号；用 \" 和 \\ 进行转义。按 Return 执行完整深度扫描。";
+
+/* No comment provided by engineer. */
+"Search Sessions…" = "搜索会话…";
+
+/* No comment provided by engineer. */
+"Security & Privacy" = "安全与隐私";
+
+/* No comment provided by engineer. */
+"Select a session" = "选择会话";
+
+/* No comment provided by engineer. */
+"Select a session to open its working directory" = "选择一个会话以打开其工作目录";
+
+/* No comment provided by engineer. */
+"Select a session to reveal its log file" = "选择一个会话以显示其日志文件";
+
+/* No comment provided by engineer. */
+"Select a session to view transcript" = "选择一个会话以查看转录";
+
+/* No comment provided by engineer. */
+"Select a session with project metadata to filter" = "请选择一个带有项目元数据的会话以进行筛选";
+
+/* No comment provided by engineer. */
+"Select an image" = "选择图片";
+
+/* No comment provided by engineer. */
+"Select exactly one session to copy its ID" = "请选择且仅选择一个会话以复制其 ID";
+
+/* No comment provided by engineer. */
+"Select exactly one session to copy its resume command" = "请选择且仅选择一个会话以复制其恢复命令";
+
+/* No comment provided by engineer. */
+"Select the Claude CLI binary from the filesystem" = "从文件系统中选择Claude CLI binary";
+
+/* No comment provided by engineer. */
+"Select the Codex binary from the filesystem" = "从文件系统中选择Codex binary";
+
+/* No comment provided by engineer. */
+"Select the Cursor CLI binary from the filesystem" = "从文件系统中选择Cursor CLI binary";
+
+/* No comment provided by engineer. */
+"Select the Droid CLI binary from the filesystem" = "从文件系统中选择Droid CLI binary";
+
+/* No comment provided by engineer. */
+"Select the Gemini CLI binary from the filesystem" = "从文件系统中选择Gemini CLI binary";
+
+/* No comment provided by engineer. */
+"Select the GitHub Copilot CLI binary from the filesystem" = "从文件系统中选择GitHub Copilot CLI binary";
+
+/* No comment provided by engineer. */
+"Select the OpenClaw binary from the filesystem" = "从文件系统中选择OpenClaw binary";
+
+/* No comment provided by engineer. */
+"Select the OpenCode CLI binary from the filesystem" = "从文件系统中选择OpenCode CLI binary";
+
+/* No comment provided by engineer. */
+"Select this session in the main Agent Sessions window and open its transcript." = "在主 Agent Sessions 窗口中选中该会话，并打开它的转录。";
+
+/* No comment provided by engineer. */
+"session" = "会话";
+
+/* No comment provided by engineer. */
+"Session" = "会话";
+
+/* No comment provided by engineer. */
+"Session %@" = "会话 %@";
+
+/* No comment provided by engineer. */
+"Session file no longer exists." = "会话文件已不存在。";
+
+/* No comment provided by engineer. */
+"Session file not found" = "未找到会话文件";
+
+/* No comment provided by engineer. */
+"Session Has Evolved" = "会话环境已发生变化";
+
+/* No comment provided by engineer. */
+"Session titles" = "会话标题";
+
+/* No comment provided by engineer. */
+"Session view — terminal-inspired output with colorized commands and tool output. Cmd+Shift+T toggles between Text and Session." = "会话视图：以终端风格展示内容，对命令和工具输出进行着色。可通过 Cmd+Shift+T 在“文本”和“会话”之间切换。";
+
+/* No comment provided by engineer. */
+"sessions" = "会话";
+
+/* No comment provided by engineer. */
+"Sessions" = "会话";
+
+/* No comment provided by engineer. */
+"Sessions by Agent" = "按 Agent 统计会话";
+
+/* No comment provided by engineer. */
+"sessions found" = "找到会话";
+
+/* No comment provided by engineer. */
+"Sessions Over Time" = "会话趋势";
+
+/* No comment provided by engineer. */
+"sessions visible" = "可见会话";
+
+/* No comment provided by engineer. */
+"Sets the default compact window height by visible rows. Sessions above this count scroll inside the list." = "根据可见行数设置紧凑窗口的默认高度。超过该数量的会话会在列表内部滚动显示。";
+
+/* No comment provided by engineer. */
+"Settings" = "设置";
+
+/* No comment provided by engineer. */
+"Settings…" = "设置…";
+
+/* No comment provided by engineer. */
+"Setup required" = "需要设置";
+
+/* No comment provided by engineer. */
+"Show %@" = "显示 %@";
+
+/* No comment provided by engineer. */
+"Show active working sessions only." = "仅显示当前处于工作中的活跃会话。";
+
+/* No comment provided by engineer. */
+"Show agent name in compact mode" = "在紧凑模式下显示智能体名称";
+
+/* No comment provided by engineer. */
+"Show all live sessions." = "显示全部实时会话。";
+
+/* No comment provided by engineer. */
+"Show deleted OpenClaw sessions" = "显示已删除的 OpenClaw 会话";
+
+/* No comment provided by engineer. */
+"Show filter and navigation" = "显示筛选和导航控件";
+
+/* No comment provided by engineer. */
+"Show Git Context" = "显示 Git 上下文";
+
+/* No comment provided by engineer. */
+"Show Git Context button" = "显示 Git 上下文按钮";
+
+/* No comment provided by engineer. */
+"Show hidden toolbar controls" = "显示隐藏的工具栏控件";
+
+/* No comment provided by engineer. */
+"Show historical and current git context with safety analysis" = "显示历史与当前 Git 上下文，并附带安全分析";
+
+/* No comment provided by engineer. */
+"Show Images" = "显示图片";
+
+/* No comment provided by engineer. */
+"Show in-app usage strip" = "显示应用内用量条";
+
+/* No comment provided by engineer. */
+"Show inline image thumbnails in Session view" = "在会话视图中显示内联图片缩略图";
+
+/* No comment provided by engineer. */
+"Show line numbers for code and diff blocks" = "为代码和 diff 区块显示行号";
+
+/* No comment provided by engineer. */
+"Show Onboarding" = "显示引导";
+
+/* No comment provided by engineer. */
+"Show only live sessions in the list (Codex, Claude)" = "仅在列表中显示实时会话（Codex、Claude）";
+
+/* No comment provided by engineer. */
+"Show only sessions from %@ (⌥⌘P)" = "仅显示来自 %@ 的会话（⌥⌘P）";
+
+/* No comment provided by engineer. */
+"Show or hide Claude sessions in the list (⌘2)" = "在列表中显示或隐藏 Claude 会话（⌘2）";
+
+/* No comment provided by engineer. */
+"Show or hide Codex sessions in the list (⌘1)" = "在列表中显示或隐藏 Codex 会话（⌘1）";
+
+/* No comment provided by engineer. */
+"Show or hide Copilot sessions in the list (⌘5)" = "在列表中显示或隐藏 Copilot 会话（⌘5）";
+
+/* No comment provided by engineer. */
+"Show or hide Cursor sessions in the list (⌘8)" = "在列表中显示或隐藏 Cursor 会话（⌘8）";
+
+/* No comment provided by engineer. */
+"Show or hide Droid sessions in the list (⌘6)" = "在列表中显示或隐藏 Droid 会话（⌘6）";
+
+/* No comment provided by engineer. */
+"Show or hide Gemini sessions in the list (⌘3)" = "在列表中显示或隐藏 Gemini 会话（⌘3）";
+
+/* No comment provided by engineer. */
+"Show or hide message counts in the Sessions list" = "在会话列表中显示或隐藏消息数";
+
+/* No comment provided by engineer. */
+"Show or hide OpenClaw sessions in the list (⌘7)" = "在列表中显示或隐藏 OpenClaw 会话（⌘7）";
+
+/* No comment provided by engineer. */
+"Show or hide OpenCode sessions in the list (⌘4)" = "在列表中显示或隐藏 OpenCode 会话（⌘4）";
+
+/* No comment provided by engineer. */
+"Show or hide the CLI Agent source column in the Unified list" = "在统一列表中显示或隐藏 CLI 智能体来源列";
+
+/* No comment provided by engineer. */
+"Show or hide the file size column in the Unified list" = "在统一列表中显示或隐藏文件大小列";
+
+/* No comment provided by engineer. */
+"Show or hide the modified date column" = "显示或隐藏修改日期列";
+
+/* No comment provided by engineer. */
+"Show or hide the Project column in the Sessions list" = "在会话列表中显示或隐藏项目列";
+
+/* No comment provided by engineer. */
+"Show or hide the Save button. Saved sessions can be kept locally to prevent upstream pruning from removing them." = "显示或隐藏“保存”按钮。已保存会话可保留在本地，避免被上游清理策略删除。";
+
+/* No comment provided by engineer. */
+"Show or hide the Session title column in the Sessions list" = "在会话列表中显示或隐藏会话标题列";
+
+/* No comment provided by engineer. */
+"Show per-block line numbers for semantic code and diff transcript blocks." = "为语义化代码块和 diff 转录块按区块显示行号。";
+
+/* No comment provided by engineer. */
+"Show probe sessions in Cockpit HUD (debug)" = "在 Cockpit HUD 中显示探测会话（调试）";
+
+/* No comment provided by engineer. */
+"Show resume diagnostics for this session" = "显示此会话的恢复诊断信息";
+
+/* No comment provided by engineer. */
+"Show Saved Copy" = "显示已保存副本";
+
+/* No comment provided by engineer. */
+"Show Session Files" = "显示会话文件";
+
+/* No comment provided by engineer. */
+"Show session log file in Finder (⌥⌘L)" = "在 Finder 中显示会话日志文件（⌥⌘L）";
+
+/* No comment provided by engineer. */
+"Show small image thumbnails inline in Session view. Thumbnails load after scrolling stops to reduce CPU and I/O during fast scroll." = "在会话视图中以内联方式显示小尺寸图片缩略图。缩略图会在滚动停止后再加载，以降低快速滚动时的 CPU 和 I/O 开销。";
+
+/* No comment provided by engineer. */
+"Show subagent hierarchy (⇧⌘H)" = "显示子智能体层级（⇧⌘H）";
+
+/* No comment provided by engineer. */
+"Show system probe sessions for debugging" = "显示系统探测会话（调试用）";
+
+/* No comment provided by engineer. */
+"Show tab subtitle under agent name" = "在智能体名称下显示标签页副标题";
+
+/* No comment provided by engineer. */
+"Show the Git Context toolbar button in Sessions (⌘⇧G)" = "在“会话”中显示 Git 上下文工具栏按钮（⌘⇧G）";
+
+/* No comment provided by engineer. */
+"Show usage limits footer" = "显示用量额度页脚";
+
+/* No comment provided by engineer. */
+"Show waiting sessions only." = "仅显示等待中的会话。";
+
+/* No comment provided by engineer. */
+"Showing active agents only" = "仅显示活跃 Agent";
+
+/* No comment provided by engineer. */
+"Shows a compact limits footer at the bottom of the Cockpit window with 5-hour and weekly usage percentages for enabled providers." = "在 Cockpit 窗口底部显示紧凑的额度页脚，展示已启用服务的 5 小时和每周用量百分比。";
+
+/* No comment provided by engineer. */
+"Single Session" = "单个会话";
+
+/* No comment provided by engineer. */
+"Size" = "大小";
+
+/* No comment provided by engineer. */
+"Size column" = "大小列";
+
+/* No comment provided by engineer. */
+"Skip preambles when parsing (Codex + Claude)" = "解析时跳过前导说明（Codex + Claude）";
+
+/* No comment provided by engineer. */
+"Small" = "小";
+
+/* No comment provided by engineer. */
+"SNAPSHOT AT SESSION START" = "会话开始时快照";
+
+/* No comment provided by engineer. */
+"Source" = "来源";
+
+/* No comment provided by engineer. */
+"Source column" = "来源列";
+
+/* No comment provided by engineer. */
+"Sources %lld/%lld" = "来源 %lld/%lld";
+
+/* No comment provided by engineer. */
+"Speak" = "朗读";
+
+/* No comment provided by engineer. */
+"SQLite (%@)" = "SQLite (%@)";
+
+/* No comment provided by engineer. */
+"Stale" = "过期";
+
+/* No comment provided by engineer. */
+"Star Agent Sessions on GitHub" = "在 GitHub 上为 Agent Sessions 点个 Star";
+
+/* No comment provided by engineer. */
+"Start coding to see analytics" = "开始编码后即可看到分析数据";
+
+/* No comment provided by engineer. */
+"Status" = "状态";
+
+/* No comment provided by engineer. */
+"Status may be stale, consider refreshing" = "状态可能已过期，建议刷新";
+
+/* No comment provided by engineer. */
+"Status: Beta. Scope in this release: Codex + Claude live/open detection." = "状态：Beta。本版本支持范围：Codex + Claude 的实时/打开状态检测。";
+
+/* No comment provided by engineer. */
+"Step %lld of %lld" = "第 %lld / %lld 步";
+
+/* No comment provided by engineer. */
+"Stop Speaking" = "停止朗读";
+
+/* No comment provided by engineer. */
+"Stop syncing after inactivity" = "闲置后停止同步";
+
+/* No comment provided by engineer. */
+"Style" = "样式";
+
+/* No comment provided by engineer. */
+"Subagent" = "子 Agent";
+
+/* No comment provided by engineer. */
+"Support on GitHub Sponsors" = "通过 GitHub Sponsors 支持";
+
+/* No comment provided by engineer. */
+"Support the project" = "支持项目";
+
+/* No comment provided by engineer. */
+"Switch between relative and absolute modified timestamps" = "在相对时间和绝对修改时间之间切换";
+
+/* No comment provided by engineer. */
+"System" = "系统";
+
+/* No comment provided by engineer. */
+"System Default" = "系统默认";
+
+/* No comment provided by engineer. */
+"T" = "T";
+
+/* No comment provided by engineer. */
+"Tap to flip card and see agent details" = "点击翻转卡片以查看智能体详情";
+
+/* No comment provided by engineer. */
+"Tap to flip card and see insights" = "点击翻转卡片以查看洞察";
+
+/* No comment provided by engineer. */
+"Tap to flip card and see more details" = "点击翻转卡片以查看更多详情";
+
+/* No comment provided by engineer. */
+"Tap to flip card and see time details" = "点击翻转卡片以查看时间详情";
+
+/* No comment provided by engineer. */
+"Terminal" = "终端";
+
+/* No comment provided by engineer. */
+"Text" = "文本";
+
+/* No comment provided by engineer. */
+"Text view — merged chat and tools. Cmd+Shift+T toggles between Text and Session." = "文本视图：合并展示聊天内容与工具调用。可通过 Cmd+Shift+T 在“文本”和“会话”之间切换。";
+
+/* No comment provided by engineer. */
+"The directory no longer exists:\\n%@" = "该目录已不存在：\\n%@";
+
+/* No comment provided by engineer. */
+"The menu bar item shows active and waiting sessions first. Usage controls and reset details appear below when usage tracking is enabled." = "菜单栏项目会优先显示活跃和等待中的会话。启用用量跟踪后，下方会显示用量控制项和重置详情。";
+
+/* No comment provided by engineer. */
+"This %@ session was removed by the system or CLI." = "此 %@ 会话已被系统或 CLI 移除。";
+
+/* No comment provided by engineer. */
+"This agent is disabled in General → Active CLI agents." = "该智能体已在“常规 → 活跃 CLI 智能体”中被禁用。";
+
+/* No comment provided by engineer. */
+"This feature runs Claude Code headlessly via tmux to fetch `/usage` data (default: every 15 minutes).\\n\\nRequirements: Claude CLI + tmux installed and authenticated\\n\\nInstall tmux (via Homebrew):\\n  brew install tmux\\n\\n⚠️ Warnings:\\n- Experimental - may fail or cause slowdowns\\n- Probing may count toward Claude Code usage limits\\n- Disable immediately if you notice performance issues\\n- First use requests file access permission (one-time)\\n\\nPrivacy: Only reads usage percentages, no conversation data accessed." = "此功能会通过 tmux 以无界面方式运行 Claude Code，以获取 `/usage` 数据（默认每 15 分钟一次）。\n\n要求：已安装并完成认证的 Claude CLI + tmux\n\n安装 tmux（通过 Homebrew）：\n  brew install tmux\n\n⚠️ 警告：\n- 这是实验性功能，可能失败或导致性能变慢\n- 探测可能会计入 Claude Code 的用量限制\n- 如果发现性能问题，请立即关闭\n- 首次使用会请求一次性文件访问权限\n\n隐私说明：仅读取用量百分比，不访问任何对话内容。";
+
+/* No comment provided by engineer. */
+"This finds additional matches inside large tool outputs that may not appear in Instant search. Leaving this off keeps search more responsive." = "这会在大型工具输出中查找额外匹配项，这些结果可能不会出现在即时搜索中。关闭后，搜索响应会更快。";
+
+/* No comment provided by engineer. */
+"This Gemini session could not be parsed. It may be truncated or corrupted." = "这个 Gemini 会话无法解析，可能已被截断或损坏。";
+
+/* No comment provided by engineer. */
+"This is an advanced repair action and can be CPU-intensive." = "这是高级修复操作，可能会占用较多 CPU。";
+
+/* No comment provided by engineer. */
+"This rebuild purges cached core index data for all providers (including disabled ones), then rebuilds enabled providers. It can use significant CPU and may reduce responsiveness until complete." = "此重建操作会清除所有提供方（包括已禁用项）的核心索引缓存数据，然后仅重建已启用提供方的索引。整个过程可能会占用较多 CPU，并在完成前降低界面响应速度。";
+
+/* No comment provided by engineer. */
+"This removes all queued crash reports from local storage." = "这会从本地存储中移除所有待处理的崩溃报告。";
+
+/* No comment provided by engineer. */
+"This session doesn't contain git metadata." = "此会话不包含 Git 元数据。";
+
+/* No comment provided by engineer. */
+"This will remove %lld session%@ from Saved and move their local archive copies to the Trash. Original session files are not deleted." = "这将把 %lld 个会话从“已保存”中移除，并将其本地归档副本移入废纸篓。原始会话文件不会被删除。";
+"This edition is based on jazzyalex's original Agent Sessions project and has been adapted with Chinese localization by Gus616." = "本版本基于 jazzyalex 的原始 Agent Sessions 项目进行二次开发与中文本地化，汉化作者：Gus616。";
+"Original Website:" = "原项目网站：";
+"Original GitHub:" = "原项目 GitHub：";
+"Original Author:" = "原作者：";
+"Delete Session File…" = "删除会话文件…";
+"Delete Session File?" = "删除会话文件？";
+"Delete Session File" = "删除会话文件";
+"Delete Session File Failed" = "删除会话文件失败";
+"This action is only available for original JSONL session files." = "此操作仅适用于原始 JSONL 会话文件。";
+"This will move \"%@\" and any saved local copy for this session to the Trash. This action also removes the session from Saved." = "这将把“%@”及该会话的所有本地保存副本移入废纸篓，并同时将该会话从“已保存”中移除。";
+"Couldn't delete \"%@\". %@" = "无法删除“%@”。%@";
+
+/* No comment provided by engineer. */
+"This will reset General, Sessions, Resume (Codex & Claude), Usage, and Menu Bar settings." = "这将重置“常规”“会话”“恢复（Codex 与 Claude）”“用量”和“菜单栏”设置。";
+
+/* No comment provided by engineer. */
+"Time Insights" = "时间洞察";
+
+/* No comment provided by engineer. */
+"Time of Day" = "时段分布";
+
+/* No comment provided by engineer. */
+"Title" = "标题";
+
+/* No comment provided by engineer. */
+"tmux not found" = "未找到 tmux";
+
+/* No comment provided by engineer. */
+"Today" = "今天";
+
+/* No comment provided by engineer. */
+"Toggle Dark/Light" = "切换深色/浅色";
+
+/* No comment provided by engineer. */
+"Toggle Layout" = "切换布局";
+
+/* No comment provided by engineer. */
+"TOP TIME SLOTS" = "最活跃时段";
+
+/* No comment provided by engineer. */
+"Track your Codex CLI coding sessions" = "跟踪你的 Codex CLI 编码会话";
+
+/* No comment provided by engineer. */
+"Transcript" = "转录";
+
+/* No comment provided by engineer. */
+"TRENDS" = "趋势";
+
+/* No comment provided by engineer. */
+"Turn file path references like Foo.swift:56 into clickable links that open in your editor." = "将类似 `Foo.swift:56` 的文件路径引用变成可点击链接，并在编辑器中打开。";
+
+/* No comment provided by engineer. */
+"Unable to execute the specified binary. Check the path and try again." = "无法执行指定的可执行文件。请检查路径后重试。";
+
+/* No comment provided by engineer. */
+"Unable to query git status. The repository may no longer exist or is not accessible." = "无法查询 Git 状态。该仓库可能已不存在，或当前无法访问。";
+
+/* No comment provided by engineer. */
+"Unable to Verify" = "无法验证";
+
+/* No comment provided by engineer. */
+"Unable to verify safety" = "无法验证安全性";
+
+/* No comment provided by engineer. */
+"Unavailable in recent logs" = "最近日志中不可用";
+
+/* No comment provided by engineer. */
+"Uncommitted Changes Detected" = "检测到未提交变更";
+
+/* No comment provided by engineer. */
+"Uncommitted changes detected - resume with caution" = "检测到未提交变更，请谨慎恢复";
+
+/* No comment provided by engineer. */
+"Unified Search matches (⌥⌘F, ⌘G, ⇧⌘G)" = "统一搜索匹配项（⌥⌘F、⌘G、⇧⌘G）";
+
+/* No comment provided by engineer. */
+"Unified Window" = "统一窗口";
+
+/* No comment provided by engineer. */
+"Unknown" = "未知";
+
+/* No comment provided by engineer. */
+"UNKNOWN" = "未知";
+
+/* No comment provided by engineer. */
+"Unknown at start" = "开始时未知";
+
+/* No comment provided by engineer. */
+"Unpin — stop keeping on top" = "取消置顶：不再保持在最前";
+
+/* No comment provided by engineer. */
+"Update" = "更新";
+
+/* No comment provided by engineer. */
+"Update this session's preview to reflect the latest file contents" = "更新此会话的预览，使其反映最新文件内容";
+
+/* No comment provided by engineer. */
+"Update..." = "更新...";
+
+/* No comment provided by engineer. */
+"Updated %@" = "已更新 %@";
+
+/* No comment provided by engineer. */
+"Updating" = "更新中";
+
+/* No comment provided by engineer. */
+"Updating..." = "更新中...";
+
+/* No comment provided by engineer. */
+"Usage Limit Tracking" = "用量额度跟踪";
+
+/* No comment provided by engineer. */
+"Usage Probes" = "用量探测";
+
+/* No comment provided by engineer. */
+"Usage Tracking" = "用量跟踪";
+
+/* No comment provided by engineer. */
+"Use experimental resume flag" = "使用实验性恢复标志";
+
+/* No comment provided by engineer. */
+"Use System Appearance" = "使用系统外观";
+
+/* No comment provided by engineer. */
+"Use the auto-detected Claude CLI or supply a custom path" = "使用自动检测到的Claude CLI，或提供自定义路径";
+
+/* No comment provided by engineer. */
+"Use the auto-detected Copilot CLI or supply a custom path" = "使用自动检测到的Copilot CLI，或提供自定义路径";
+
+/* No comment provided by engineer. */
+"Use the auto-detected Cursor CLI or supply a custom path" = "使用自动检测到的Cursor CLI，或提供自定义路径";
+
+/* No comment provided by engineer. */
+"Use the auto-detected Droid CLI or supply a custom path" = "使用自动检测到的Droid CLI，或提供自定义路径";
+
+/* No comment provided by engineer. */
+"Use the auto-detected Gemini CLI or supply a custom path" = "使用自动检测到的Gemini CLI，或提供自定义路径";
+
+/* No comment provided by engineer. */
+"Use the auto-detected OpenClaw binary or supply a custom path" = "使用自动检测到的OpenClaw binary，或提供自定义路径";
+
+/* No comment provided by engineer. */
+"Use the auto-detected OpenCode CLI or supply a custom path" = "使用自动检测到的OpenCode CLI，或提供自定义路径";
+
+/* No comment provided by engineer. */
+"used" = "已用";
+
+/* No comment provided by engineer. */
+"Used % (Claude-style)" = "已用额度 %（Claude 风格）";
+
+/* No comment provided by engineer. */
+"USER PROMPT" = "用户提示";
+
+/* No comment provided by engineer. */
+"Uses a denser window background for better readability over dark or busy wallpapers." = "使用更厚重的窗口背景，以便在深色或复杂壁纸上获得更好的可读性。";
+
+/* No comment provided by engineer. */
+"View" = "视图";
+
+/* No comment provided by engineer. */
+"View Style" = "视图样式";
+
+/* No comment provided by engineer. */
+"View your Droid agent sessions" = "查看你的 Droid Agent 会话";
+
+/* No comment provided by engineer. */
+"View your Gemini CLI interactions" = "查看你的 Gemini CLI 交互";
+
+/* No comment provided by engineer. */
+"VS Code" = "VS Code";
+
+/* No comment provided by engineer. */
+"W" = "W";
+
+/* No comment provided by engineer. */
+"Wait for probe result…" = "等待探测结果…";
+
+/* No comment provided by engineer. */
+"Waiting" = "等待中";
+
+/* No comment provided by engineer. */
+"WARNING" = "警告";
+
+/* No comment provided by engineer. */
+"Web API reads the Safari session cookie for claude.ai. On macOS 14+, this requires Full Disk Access." = "Web API 会读取 Safari 中 claude.ai 的会话 Cookie。在 macOS 14 及以上版本中，这需要“完全磁盘访问权限”。";
+
+/* No comment provided by engineer. */
+"Weekly only" = "仅每周";
+
+/* No comment provided by engineer. */
+"When disabled, compact rows hide the agent-name text to free horizontal space. Status dot and row numbering remain visible." = "关闭后，紧凑行会隐藏智能体名称文本，以释放横向空间。状态点和行号仍会保留。";
+
+/* No comment provided by engineer. */
+"When enabled, compact mode grows/shrinks with visible session count. Off keeps compact height stable and uses scrolling." = "启用后，紧凑模式会随着可见会话数量自动增减高度；关闭后，紧凑模式高度保持稳定，并通过滚动查看内容。";
+
+/* No comment provided by engineer. */
+"When enabled, falls back to opencode --continue if --resume is unavailable" = "启用后，如果 `--resume` 不可用，则回退到 `opencode --continue`";
+
+/* No comment provided by engineer. */
+"When enabled, global search continues scanning large tool outputs in the background after showing indexed results. This can be noticeably slower on large histories." = "启用后，全局搜索在显示索引结果后，会继续在后台扫描大型工具输出。面对较长历史记录时，这可能明显变慢。";
+
+/* No comment provided by engineer. */
+"When enabled, recognized Codex internal review payloads render as summary cards instead of raw JSON." = "启用后，识别到的 Codex 内部审查载荷会以摘要卡片形式渲染，而不是直接显示原始 JSON。";
+
+/* No comment provided by engineer. */
+"When enabled, removing a session from Saved also deletes the local archive copy. By default, removing from Saved is non-destructive." = "启用后，从“已保存”中移除会话时，也会删除本地归档副本。默认情况下，从“已保存”中移除是非破坏性的。";
+
+/* No comment provided by engineer. */
+"When enabled, saving a session also archives its source files into Agent Sessions storage so it cannot disappear when the upstream CLI prunes history." = "启用后，保存会话时也会把其源文件归档到 Agent Sessions 存储中，这样即使上游 CLI 清理历史记录，也不会丢失。";
+
+/* No comment provided by engineer. */
+"When opening a session without a search query, choose which prompt to jump to in Session view" = "在没有搜索词的情况下打开会话时，选择在“会话”视图中跳转到哪一条提示";
+
+/* No comment provided by engineer. */
+"When there are no recent Codex sessions (6+ hours) and the strip or menu bar is visible, ask Codex CLI (/status) via tmux for current usage." = "当最近 6 小时内没有 Codex 会话，且用量条或菜单栏可见时，通过 tmux 调用 Codex CLI（/status）获取当前用量。";
+
+/* No comment provided by engineer. */
+"Wk: " = "周：";
+
+/* No comment provided by engineer. */
+"Wk: %@" = "周：%@";
+
+/* No comment provided by engineer. */
+"Working Tree:" = "工作树：";
+
+/* No comment provided by engineer. */
+"Yesterday" = "昨天";
+
+/* No comment provided by engineer. */
+"You have the latest version installed." = "你安装的已经是最新版本。";
+
+/* No comment provided by engineer. */
+"You're up to date" = "当前已是最新版本";
+
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Live Sessions" = "实时会话";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Open Agent Cockpit" = "打开 Agent 控制台";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Show Active/Waiting sessions" = "显示活跃/等待中的会话";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Copy setup command: claude" = "复制设置命令：claude";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Menu Bar Label" = "菜单栏标签";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Show Codex reset indicators" = "显示 Codex 重置指示";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Show Claude reset indicators" = "显示 Claude 重置指示";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Hard Refresh Codex" = "强制刷新 Codex";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Hard Refresh Claude" = "强制刷新 Claude";
+
+/* Manually added for AppKit-localized dynamic menu titles. */
+"Hide Menu Bar Item" = "隐藏菜单栏项目";
+
+/* Manually added during zh-Hans cleanup. */
+"Resume the selected session in its original CLI (⌃⌘R)." = "在原始 CLI 中恢复所选会话（⌃⌘R）。";
+
+/* Manually added during zh-Hans cleanup. */
+"Reveal the selected session's working directory in Finder (⌘⇧O)" = "在 Finder 中显示所选会话的工作目录（⌘⇧O）";
+
+/* Manually added during zh-Hans cleanup. */
+"Refresh sessions list/index (core indexing, not Analytics) (⌘R)" = "刷新会话列表/索引（核心索引，不含 Analytics）（⌘R）";
+
+/* Manually added during zh-Hans cleanup. */
+"Open preferences for appearance, indexing, and agents (⌘,)" = "打开外观、索引和 Agent 设置（⌘,）";
+
+/* Manually added during zh-Hans cleanup. */
+"Switch to Light Mode" = "切换到浅色模式";
+
+/* Manually added during zh-Hans cleanup. */
+"Switch to Dark Mode" = "切换到深色模式";
+
+/* Manually added during zh-Hans cleanup. */
+"Switch to vertical split layout" = "切换到纵向分栏布局";
+
+/* Manually added during zh-Hans cleanup. */
+"Switch to horizontal split layout" = "切换到横向分栏布局";
+
+/* Manually added during zh-Hans cleanup. */
+"Show only saved sessions" = "仅显示已保存会话";
+
+/* Manually added during zh-Hans cleanup. */
+"Enable the Save column in Preferences to use saved sessions" = "请先在“设置”中启用“保存”列，才能使用已保存会话";
+
+/* Manually added during zh-Hans cleanup. */
+"Show historical and current git context with safety analysis (⌘⇧G)" = "显示历史与当前 Git 上下文，并附带安全分析（⌘⇧G）";
+
+/* Manually added during zh-Hans cleanup. */
+"Remove from Saved (deletes local copy)" = "从已保存中移除（会删除本地副本）";
+
+/* Manually added during zh-Hans cleanup. */
+"Remove from Saved (keeps local copy)" = "从已保存中移除（保留本地副本）";
+
+/* Manually added during zh-Hans cleanup. */
+"Save (keeps locally)" = "保存（保留本地副本）";
+
+/* Manually added during zh-Hans cleanup. */
+"Search sessions (⌥⌘F). Filters: repo:NAME, path:PATH. Use quotes for phrases; escape \" and \\. Press Return for full deep scan." = "搜索会话（⌥⌘F）。筛选器：repo:NAME、path:PATH。短语请使用引号；用 \" 和 \\ 进行转义。按 Return 执行完整深度扫描。";
+
+/* Manually added during zh-Hans cleanup. */
+"View analytics (stale data, update available) (⌘K)" = "查看分析（数据已过期，可执行更新）（⌘K）";
+
+/* Manually added during zh-Hans cleanup. */
+"View usage analytics (⌘K)" = "查看用量分析（⌘K）";
+
+/* Manually added during zh-Hans cleanup. */
+"View analytics (last build failed, retry available) (⌘K)" = "查看分析（上次构建失败，可重试）（⌘K）";
+
+/* Manually added during zh-Hans cleanup. */
+"View analytics (build canceled, restart available) (⌘K)" = "查看分析（构建已取消，可重新开始）（⌘K）";
+
+/* Manually added during zh-Hans cleanup. */
+"View analytics (build required) (⌘K)" = "查看分析（需要先构建）（⌘K）";
+
+/* Manually added during zh-Hans cleanup. */
+"Analytics build in progress (⌘K)" = "分析构建进行中（⌘K）";
+
+/* Added during image-browser localization cleanup. */
+"Show images for the selected session" = "显示所选会话的图片";
+
+/* Added during image-browser localization cleanup. */
+"Click to open Image Browser" = "点击以打开图片浏览器";
+
+/* Added during image-browser localization cleanup. */
+"Prompt unavailable" = "提示内容不可用";
+
+/* Added during image-browser localization cleanup. */
+"SESSION" = "会话";
+
+/* Added during image-browser localization cleanup. */
+"PROJECT" = "项目";
+
+/* Added during image-browser localization cleanup. */
+"AGENT" = "智能体";
+
+/* Added during image-browser localization cleanup. */
+"TIME" = "时间";
+
+/* Added during image-browser localization cleanup. */
+"SIZE" = "大小";
+
+/* Added during image-browser localization cleanup. */
+"DIMENSIONS" = "尺寸";
+
+/* Added during Preferences localization cleanup. */
+"Menu Bar Item" = "菜单栏项目";
+
+/* Added during Preferences localization cleanup. */
+"Show menu bar item" = "显示菜单栏项目";
+
+/* Added during Preferences localization cleanup. */
+"Add a menu bar item that shows live session counts and usage details when available" = "添加一个菜单栏项目，在可用时显示实时会话数量和用量详情";
+
+/* Added during Preferences localization cleanup. */
+"Show menu bar icons" = "显示菜单栏图标";
+
+/* Added during Preferences localization cleanup. */
+"Show or hide the Active/Waiting session indicators in the menu bar label." = "在菜单栏标签中显示或隐藏“活跃/等待中”会话指示。";
+
+/* Added during Preferences localization cleanup. */
+"Show the ↻ reset indicator next to the Codex usage meter when the menu bar label is displaying usage" = "当菜单栏标签显示用量时，在 Codex 用量指示旁显示 ↻ 重置标记";
+
+/* Added during Preferences localization cleanup. */
+"Show the ↻ reset indicator next to the Claude usage meter when the menu bar label is displaying usage" = "当菜单栏标签显示用量时，在 Claude 用量指示旁显示 ↻ 重置标记";
+
+/* Added during Preferences localization cleanup. */
+"Show pills in menu bar" = "在菜单栏中显示胶囊标签";
+
+/* Added during Preferences localization cleanup. */
+"Add pill containers around usage meters. Off by default to keep the menu bar compact." = "在用量指示外添加胶囊式容器。默认关闭，以保持菜单栏紧凑。";
+
+/* Added during Preferences localization cleanup. */
+"Usage Sources" = "用量来源";
+
+/* Added during Preferences localization cleanup. */
+"Enable Codex tracking" = "启用 Codex 跟踪";
+
+/* Added during Preferences localization cleanup. */
+"Turn Codex usage tracking on or off (independent of strip/menu bar)" = "开启或关闭 Codex 用量跟踪（独立于条带/菜单栏设置）";
+
+/* Added during Preferences localization cleanup. */
+"Refresh every" = "刷新频率";
+
+/* Added during Preferences localization cleanup. */
+"Enable Claude tracking" = "启用 Claude 跟踪";
+
+/* Added during Preferences localization cleanup. */
+"Turn Claude usage tracking on or off (independent of strip/menu bar)" = "开启或关闭 Claude 用量跟踪（独立于条带/菜单栏设置）";
+
+/* Added during Preferences localization cleanup. */
+"Data source" = "数据来源";
+
+/* Added during Preferences localization cleanup. */
+"Auto (OAuth + tmux)" = "自动（OAuth + tmux）";
+
+/* Added during Preferences localization cleanup. */
+"OAuth only" = "仅 OAuth";
+
+/* Added during Preferences localization cleanup. */
+"tmux only" = "仅 tmux";
+
+/* Added during Preferences localization cleanup. */
+"Web API only" = "仅 Web API";
+
+/* Added during Preferences localization cleanup. */
+"Include Web API in Auto fallback" = "在自动回退中包含 Web API";
+
+/* Added during Preferences localization cleanup. */
+"When enabled, Auto mode falls back to the claude.ai Web API before tmux. Reads Safari session cookie. May require Full Disk Access on macOS 14+." = "启用后，自动模式会在回退到 tmux 之前先尝试 claude.ai Web API。会读取 Safari 的会话 Cookie，在 macOS 14 及以上版本中可能需要“完全磁盘访问权限”。";
+
+/* Added during Preferences localization cleanup. */
+"Strip Options" = "条带选项";
+
+/* Added during Preferences localization cleanup. */
+"Show Codex strip" = "显示 Codex 条带";
+
+/* Added during Preferences localization cleanup. */
+"Show the Codex usage strip at the bottom of the Unified window" = "在统一窗口底部显示 Codex 用量条带";
+
+/* Added during Preferences localization cleanup. */
+"Show Claude strip" = "显示 Claude 条带";
+
+/* Added during Preferences localization cleanup. */
+"Show the Claude usage strip at the bottom of the Unified window" = "在统一窗口底部显示 Claude 用量条带";
+
+/* Added during Preferences localization cleanup. */
+"Show reset times" = "显示重置时间";
+
+/* Added during Preferences localization cleanup. */
+"Display the usage reset timestamp next to each meter" = "在每个用量指示旁显示重置时间戳";
+
+/* Added during Preferences localization cleanup. */
+"Display Style" = "显示样式";
+
+/* Added during Preferences localization cleanup. */
+"Limits display" = "额度显示方式";

@@ -1,0 +1,18 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "Agent Sessions";
+
+/* Bundle name */
+"CFBundleName" = "Agent Sessions";
+
+/* Privacy - AppleEvents Sending Usage Description */
+"NSAppleEventsUsageDescription" = "Agent Sessions 会控制 Terminal，代你恢复 Codex 会话。";
+
+/* Privacy - Desktop Folder Usage Description */
+"NSDesktopFolderUsageDescription" = "Agent Sessions 需要访问此位置，以读取会话文件。";
+
+/* Privacy - Documents Folder Usage Description */
+"NSDocumentsFolderUsageDescription" = "Agent Sessions 需要访问此位置，以读取会话文件。";
+
+/* Privacy - Downloads Folder Usage Description */
+"NSDownloadsFolderUsageDescription" = "Agent Sessions 会将导出的图片和终端录制保存到“下载”文件夹。";
+

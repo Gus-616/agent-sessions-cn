@@ -1,0 +1,5158 @@
+import SwiftUI
+import AppKit
+import Foundation
+import AVFoundation
+
+private struct MatchOccurrence: Equatable {
+    let range: NSRange
+    let lineID: Int
+}
+
+private struct TextSnapshot {
+    let text: String
+    let lineRanges: [Int: NSRange]
+    let orderedLineRanges: [NSRange]
+    let orderedLineIDs: [Int]
+
+    static let empty = TextSnapshot(text: "", lineRanges: [:], orderedLineRanges: [], orderedLineIDs: [])
+}
+
+private struct InlineSessionImage: Identifiable, Hashable, Sendable {
+    let sessionID: String
+    let imageEventID: String
+    let userPromptIndex: Int?
+    let sessionImageIndex: Int
+    let payload: SessionImagePayload
+
+    var id: String { "\(sessionID)-\(payload.stableID)" }
+}
+
+private func renderedTranscriptLineText(_ line: TerminalLine,
+                                        showCodeDiffLineNumbers: Bool,
+                                        isFirstLineOfBlock: Bool,
+                                        semanticLineNumberCounters: inout [Int: Int]) -> (text: String, linkOffset: Int) {
+    guard showCodeDiffLineNumbers,
+          let semanticKind = line.semanticKind,
+          semanticKind == .code || semanticKind == .diff else {
+        return (line.text, 0)
+    }
+
+    let isHeaderLine = isSyntheticSemanticHeader(line.text,
+                                                 semanticKind: semanticKind,
+                                                 isFirstLineOfBlock: isFirstLineOfBlock)
+    if isHeaderLine {
+        semanticLineNumberCounters[line.decorationGroupID] = 0
+        return (line.text, 0)
+    }
+
+    let nextLineNumber = (semanticLineNumberCounters[line.decorationGroupID] ?? 0) + 1
+    semanticLineNumberCounters[line.decorationGroupID] = nextLineNumber
+    let prefix = String(format: "%4d | ", nextLineNumber)
+    return (prefix + line.text, prefix.utf16.count)
+}
+
+private func isSyntheticSemanticHeader(_ text: String,
+                                       semanticKind: SemanticKind,
+                                       isFirstLineOfBlock: Bool) -> Bool {
+    guard isFirstLineOfBlock else { return false }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    switch semanticKind {
+    case .code:
+        let lower = trimmed.lowercased()
+        if lower == "code" { return true }
+        return lower.hasPrefix("code (") && lower.hasSuffix(")")
+    case .diff:
+        return trimmed.caseInsensitiveCompare("Diff") == .orderedSame
+    case .plan, .reviewSummary:
+        return false
+    }
+}
+
+/// Terminal-style session view with filters, optional gutter, and legend toggles.
+struct SessionTerminalView: View {
+    let session: Session
+    // Unified Search (⌥⌘F): shared query from the sessions list, used for in-transcript navigation/highlights.
+    let unifiedQuery: String
+    let unifiedFindToken: Int
+    let unifiedFindDirection: Int
+    let unifiedFindReset: Bool
+    let unifiedAllowMatchAutoScroll: Bool
+    @Binding var unifiedExternalMatchCount: Int
+    @Binding var unifiedExternalTotalMatchCount: Int
+    @Binding var unifiedExternalCurrentMatchIndex: Int
+
+    // Find (⌘F): local query, standard macOS find-in-document behavior.
+    let findQuery: String
+    let findToken: Int
+    let findDirection: Int
+    let findReset: Bool
+    let allowMatchAutoScroll: Bool
+    let scrollToBottomToken: Int
+    let onBottomProximityChange: (Bool) -> Void
+    let onRenderComplete: (String) -> Void
+    let jumpToken: Int
+    let roleNavToken: Int
+    let roleNavRole: RoleToggle
+    let roleNavDirection: Int
+    @Binding var externalMatchCount: Int
+    @Binding var externalTotalMatchCount: Int
+    @Binding var externalCurrentMatchIndex: Int
+    @AppStorage("TranscriptFontSize") private var transcriptFontSize: Double = 13
+    @AppStorage("StripMonochromeMeters") private var stripMonochrome: Bool = false
+    @AppStorage("InlineSessionImageThumbnailsEnabled") private var inlineSessionImageThumbnailsEnabled: Bool = true
+    @AppStorage(PreferencesKey.Transcript.enableReviewCards) private var transcriptReviewCardsEnabled: Bool = true
+    @AppStorage(PreferencesKey.Transcript.enableCodeDiffLineNumbers) private var transcriptCodeDiffLineNumbersEnabled: Bool = true
+    @AppStorage(PreferencesKey.Transcript.enableLinkification) private var transcriptLinkificationEnabled: Bool = true
+    @AppStorage(PreferencesKey.Transcript.preferredIDETarget) private var transcriptPreferredIDETargetRaw: String = IDEOpener.Target.systemDefault.rawValue
+    @AppStorage(PreferencesKey.Transcript.ideBinaryOverridePath) private var transcriptIDEBinaryOverridePath: String = ""
+    @Environment(\.colorScheme) private var colorScheme
+
+    @State private var lines: [TerminalLine] = []
+    @State private var visibleLines: [TerminalLine] = []
+    @State private var visibleLinesSignature: Int = 0
+    @State private var fullSnapshot: TextSnapshot = .empty
+    @State private var visibleSnapshot: TextSnapshot = .empty
+    @State private var rebuildTask: Task<Void, Never>?
+
+    enum RoleToggle: CaseIterable {
+        case user
+        case assistant
+        case tools
+        case errors
+    }
+
+    private enum ToolbarNavItem: Hashable, Identifiable {
+        case role(RoleToggle)
+        case images
+        case semantic(SemanticKind)
+
+        var id: String {
+            switch self {
+            case .role(.user): return "role-user"
+            case .role(.assistant): return "role-assistant"
+            case .role(.tools): return "role-tools"
+            case .role(.errors): return "role-errors"
+            case .images: return "images"
+            case .semantic(.plan): return "semantic-plan"
+            case .semantic(.code): return "semantic-code"
+            case .semantic(.diff): return "semantic-diff"
+            case .semantic(.reviewSummary): return "semantic-review"
+            }
+        }
+    }
+
+    private static let allSemanticKinds: Set<SemanticKind> = [.plan, .code, .diff, .reviewSummary]
+
+    @AppStorage("TerminalRoleToggles") private var roleToggleRaw: String = "user,assistant,tools,errors"
+    @State private var activeRoles: Set<RoleToggle> = Set(RoleToggle.allCases)
+    @AppStorage("TerminalSemanticToggles") private var semanticToggleRaw: String = "plan,code,diff,review"
+    @State private var activeSemanticKinds: Set<SemanticKind> = Self.allSemanticKinds
+
+    // Line identifiers for navigation
+    @State private var userLineIndices: [Int] = []
+    @State private var assistantLineIndices: [Int] = []
+    @State private var toolLineIndices: [Int] = []
+    @State private var errorLineIndices: [Int] = []
+    @State private var eventIDToUserLineID: [String: Int] = [:]
+    @State private var pendingEventJumpID: String? = nil
+    @State private var pendingUserPromptIndex: Int? = nil
+    @State private var transcriptFocusToken: Int = 0
+    @State private var imageHighlightLineID: Int? = nil
+    @State private var imageHighlightToken: Int = 0
+    @State private var roleNavPositions: [RoleToggle: Int] = [:]
+    @State private var semanticNavPositions: [SemanticKind: Int] = [:]
+
+    @State private var inlineImagesByUserBlockIndex: [Int: [InlineSessionImage]] = [:]
+    @State private var inlineImagesSignature: Int = 0
+    @State private var hasInlineImagesInSession: Bool = false
+    @State private var inlineImagesVisibleInSession: Bool = true
+    @State private var inlineImagesTask: Task<Void, Never>?
+    @State private var selectedInlineImageUserBlockIndex: Int? = nil
+    @State private var toolbarWidthBucket: Int = 0
+
+    // Unified Search navigation/highlight state
+    @State private var unifiedMatchOccurrences: [MatchOccurrence] = []
+    @State private var unifiedCurrentMatchLineID: Int? = nil
+
+    // Local Find state
+    @State private var findMatchOccurrences: [MatchOccurrence] = []
+    @State private var findCurrentMatchLineID: Int? = nil
+    @State private var conversationStartLineID: Int? = nil
+    @State private var scrollTargetLineID: Int? = nil
+    @State private var scrollTargetToken: Int = 0
+    @State private var roleNavScrollTargetLineID: Int? = nil
+    @State private var roleNavScrollToken: Int = 0
+    @State private var preambleUserBlockIndexes: Set<Int> = []
+    @State private var autoScrollSessionID: String? = nil
+    @State private var lastReportedRenderSessionID: String? = nil
+
+    // Derived agent label for legend chips (Codex / Claude / Gemini)
+    private var agentLegendLabel: String {
+        switch session.source {
+        case .codex: return "Codex"
+        case .claude: return "Claude"
+        case .gemini: return "Gemini"
+        case .opencode: return "OpenCode"
+        case .copilot: return "Copilot"
+        case .droid: return "Droid"
+        case .openclaw: return "OpenClaw"
+        case .cursor: return "Cursor"
+        }
+    }
+
+    private var filteredLines: [TerminalLine] {
+        visibleLines
+    }
+
+    private var effectiveInlineImagesSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(inlineImagesSignature)
+        hasher.combine(inlineSessionImageThumbnailsEnabled)
+        return hasher.finalize()
+    }
+
+    private var transcriptPreferredIDETarget: IDEOpener.Target {
+        IDEOpener.Target(rawValue: transcriptPreferredIDETargetRaw) ?? .systemDefault
+    }
+
+    private var sessionRepoRootPath: String? {
+        Self.repoRootPath(from: session.cwd)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            Divider()
+            content
+        }
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.6 : 0.35))
+                .frame(height: 1)
+        }
+        .onAppear {
+            loadRoleToggles()
+            loadSemanticToggles()
+            rebuildLines(priority: .userInitiated)
+            refreshInlineImages()
+        }
+        .onDisappear {
+            rebuildTask?.cancel()
+            rebuildTask = nil
+            inlineImagesTask?.cancel()
+            inlineImagesTask = nil
+        }
+        .onChange(of: jumpToken) { _, _ in
+            jumpToFirstPrompt()
+        }
+        .onChange(of: session.id) { _, _ in
+            autoScrollSessionID = nil
+            imageHighlightLineID = nil
+            selectedInlineImageUserBlockIndex = nil
+            lastReportedRenderSessionID = nil
+            rebuildLines(priority: .userInitiated)
+            refreshInlineImages()
+        }
+        .onChange(of: session.events.count) { _, _ in
+            refreshInlineImages()
+        }
+        .onChange(of: inlineSessionImageThumbnailsEnabled) { _, _ in
+            // Avoid background scanning work when the feature is disabled.
+            refreshInlineImages()
+            rebuildLines(priority: .userInitiated)
+        }
+        .onChange(of: transcriptReviewCardsEnabled) { _, _ in
+            rebuildLines(priority: .userInitiated)
+        }
+        .onChange(of: transcriptCodeDiffLineNumbersEnabled) { _, _ in
+            fullSnapshot = buildTextSnapshot(lines: lines)
+            refreshVisibleLinesAndMatches()
+        }
+        .onChange(of: activeRoles) { _, _ in
+            refreshVisibleLinesAndMatches()
+        }
+        .onChange(of: activeSemanticKinds) { _, _ in
+            refreshVisibleLinesAndMatches()
+        }
+        .onChange(of: roleNavToken) { _, _ in
+            // Keyboard navigation should reveal the target role even if the user filtered it off.
+            if !activeRoles.contains(roleNavRole) {
+                activeRoles.insert(roleNavRole)
+                persistRoleToggles()
+            }
+            navigateRole(roleNavRole, direction: roleNavDirection)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToSessionEventFromImages)) { n in
+            guard let sid = n.object as? String, sid == session.id else { return }
+            if let userPromptIndex = n.userInfo?["userPromptIndex"] as? Int {
+                updateSelectedInlineImageBlockIndex(forUserPromptIndex: userPromptIndex)
+                if !jumpToUserPromptIndex(userPromptIndex) {
+                    pendingUserPromptIndex = userPromptIndex
+                }
+            } else if let eventID = n.userInfo?["eventID"] as? String {
+                updateSelectedInlineImageBlockIndex(forEventID: eventID)
+                if !jumpToEventID(eventID) {
+                    pendingEventJumpID = eventID
+                }
+            } else {
+                return
+            }
+            transcriptFocusToken &+= 1
+        }
+        .onChange(of: session.events.count) { _, _ in
+            rebuildLines(priority: .utility, debounceNanoseconds: 150_000_000)
+        }
+    }
+
+    private var toolbar: some View {
+        HStack {
+            ViewThatFits(in: .horizontal) {
+                toolbarNavigationRow(compact: false)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 8)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 7)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 6)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 5)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 4)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 3)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 2)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 1)
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbarNavigationRow(compact: true, maxInlineItems: 0)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .id(toolbarLayoutCacheKey)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor))
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        updateToolbarWidthBucket(geo.size.width)
+                    }
+                    .onChange(of: geo.size.width) { _, newValue in
+                        updateToolbarWidthBucket(newValue)
+                    }
+            }
+        }
+    }
+
+    private func toolbarNavigationRow(compact: Bool, maxInlineItems: Int? = nil) -> some View {
+        let items = availableToolbarItems()
+        let split = toolbarItemSplit(items, maxInlineItems: maxInlineItems)
+
+        return HStack(spacing: compact ? 12 : 16) {
+            allFilterButton()
+            ForEach(Array(split.inline.enumerated()), id: \.element.id) { index, item in
+                if index > 0,
+                   needsGroupDivider(before: item, previous: split.inline[index - 1]) {
+                    Divider()
+                        .frame(height: 18)
+                }
+                toolbarItemView(item, compact: compact)
+            }
+            if !split.overflow.isEmpty {
+                toolbarOverflowMenu(items: split.overflow)
+            }
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    private var toolbarLayoutCacheKey: String {
+        let itemCount = availableToolbarItems().count
+        return "\(toolbarWidthBucket)-\(itemCount)"
+    }
+
+    private func updateToolbarWidthBucket(_ width: CGFloat) {
+        let clamped = max(0, width)
+        let bucket = Int((clamped / 8.0).rounded(.down))
+        if toolbarWidthBucket != bucket {
+            toolbarWidthBucket = bucket
+        }
+    }
+
+    private func availableToolbarItems() -> [ToolbarNavItem] {
+        var items: [ToolbarNavItem] = []
+        if hasRoleItems(.user) { items.append(.role(.user)) }
+        if hasRoleItems(.assistant) { items.append(.role(.assistant)) }
+        if hasRoleItems(.tools) { items.append(.role(.tools)) }
+        if hasRoleItems(.errors) { items.append(.role(.errors)) }
+        if !sortedInlineImageUserBlockIndices().isEmpty { items.append(.images) }
+
+        if hasSemanticItems(.plan) { items.append(.semantic(.plan)) }
+        if hasSemanticItems(.code) { items.append(.semantic(.code)) }
+        if hasSemanticItems(.diff) { items.append(.semantic(.diff)) }
+        if hasSemanticItems(.reviewSummary) { items.append(.semantic(.reviewSummary)) }
+        return items
+    }
+
+    private func toolbarItemSplit(_ items: [ToolbarNavItem], maxInlineItems: Int?) -> (inline: [ToolbarNavItem], overflow: [ToolbarNavItem]) {
+        guard let maxInlineItems else { return (items, []) }
+        let maxValue = max(0, maxInlineItems)
+        guard maxValue < items.count else { return (items, []) }
+        return (Array(items.prefix(maxValue)), Array(items.dropFirst(maxValue)))
+    }
+
+    private func needsGroupDivider(before item: ToolbarNavItem, previous: ToolbarNavItem) -> Bool {
+        !isSemanticItem(previous) && isSemanticItem(item)
+    }
+
+    private func isSemanticItem(_ item: ToolbarNavItem) -> Bool {
+        if case .semantic = item { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private func toolbarItemView(_ item: ToolbarNavItem, compact: Bool) -> some View {
+        switch item {
+        case .role(let role):
+            legendToggle(label: roleLabel(for: role), role: role, compact: compact)
+        case .images:
+            imagesPill(compact: compact)
+        case .semantic(let kind):
+            semanticToggle(label: semanticDisplayLabel(for: kind), kind: kind, compact: compact)
+        }
+    }
+
+    private func toolbarOverflowMenu(items: [ToolbarNavItem]) -> some View {
+        Menu {
+            ForEach(items) { item in
+                overflowMenuSection(for: item)
+            }
+        } label: {
+            Image(systemName: "chevron.down.circle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Show hidden toolbar controls")
+    }
+
+    @ViewBuilder
+    private func overflowMenuSection(for item: ToolbarNavItem) -> some View {
+        switch item {
+        case .role(let role):
+            let label = roleLabel(for: role)
+            let isOn = activeRoles.contains(role)
+            let ids = indicesForRole(role)
+            let navDisabled = !isOn || ids.isEmpty
+            let countText = roleCountText(role)
+            Section("\(label) \(countText)") {
+                Button(isOn ? "Hide \(label)" : "Show \(label)") {
+                    if isOn {
+                        activeRoles.remove(role)
+                    } else {
+                        activeRoles.insert(role)
+                    }
+                    persistRoleToggles()
+                }
+                Button(previousHelpText(for: role)) {
+                    navigateRole(role, direction: -1)
+                }
+                .disabled(navDisabled)
+                Button(nextHelpText(for: role)) {
+                    navigateRole(role, direction: 1)
+                }
+                .disabled(navDisabled)
+            }
+        case .images:
+            let isOn = inlineImagesVisibleInSession
+            let hasImages = !sortedInlineImageUserBlockIndices().isEmpty
+            let countText = imagesCountText()
+            Section("Images \(countText)") {
+                Button(isOn ? "Hide Images" : "Show Images") {
+                    inlineImagesVisibleInSession.toggle()
+                }
+                .disabled(!hasImages)
+                Button("Previous image prompt") {
+                    navigateInlineImages(direction: -1)
+                }
+                .disabled(!hasImages)
+                Button("Next image prompt") {
+                    navigateInlineImages(direction: 1)
+                }
+                .disabled(!hasImages)
+            }
+        case .semantic(let kind):
+            let label = semanticDisplayLabel(for: kind)
+            let isOn = activeSemanticKinds.contains(kind)
+            let ids = semanticLineIndices(kind, in: visibleLines)
+            let navDisabled = !isOn || ids.isEmpty
+            let countText = semanticCountText(kind)
+            Section("\(label) \(countText)") {
+                Button(isOn ? "Hide \(label)" : "Show \(label)") {
+                    if isOn {
+                        activeSemanticKinds.remove(kind)
+                    } else {
+                        activeSemanticKinds.insert(kind)
+                    }
+                    persistSemanticToggles()
+                }
+                Button(previousSemanticHelpText(for: kind)) {
+                    navigateSemantic(kind, direction: -1)
+                }
+                .disabled(navDisabled)
+                Button(nextSemanticHelpText(for: kind)) {
+                    navigateSemantic(kind, direction: 1)
+                }
+                .disabled(navDisabled)
+            }
+        }
+    }
+
+    private var content: some View {
+        GeometryReader { outerGeo in
+            HStack(spacing: 8) {
+                TerminalTextScrollView(
+                    proximityContextID: session.id,
+                    lines: filteredLines,
+                    lineSignature: visibleLinesSignature,
+                    fontSize: CGFloat(transcriptFontSize),
+                    sessionSource: session.source,
+                    inlineImagesEnabled: inlineSessionImageThumbnailsEnabled
+                        && hasInlineImagesInSession
+                        && (session.source == .codex || session.source == .claude || session.source == .opencode || session.source == .openclaw)
+                        && inlineImagesVisibleInSession,
+                    inlineImagesByUserBlockIndex: inlineImagesByUserBlockIndex,
+                    inlineImagesSignature: effectiveInlineImagesSignature,
+                    unifiedFindQuery: unifiedQuery,
+                    unifiedFindToken: unifiedFindToken,
+                    unifiedMatchOccurrences: unifiedMatchOccurrences,
+                    unifiedCurrentMatchLineID: unifiedCurrentMatchLineID,
+                    unifiedHighlightActive: !unifiedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    unifiedAllowMatchAutoScroll: unifiedAllowMatchAutoScroll,
+                    findQuery: findQuery,
+                    findToken: findToken,
+                    findCurrentMatchLineID: findCurrentMatchLineID,
+                    findHighlightActive: !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    allowMatchAutoScroll: allowMatchAutoScroll,
+                    scrollToBottomToken: scrollToBottomToken,
+                    scrollTargetLineID: scrollTargetLineID,
+                    scrollTargetToken: scrollTargetToken,
+                    roleNavScrollTargetLineID: roleNavScrollTargetLineID,
+                    roleNavScrollToken: roleNavScrollToken,
+                    preambleUserBlockIndexes: preambleUserBlockIndexes,
+                    imageHighlightLineID: imageHighlightLineID,
+                    imageHighlightToken: imageHighlightToken,
+                    onBottomProximityChange: onBottomProximityChange,
+                    focusRequestToken: transcriptFocusToken,
+                    colorScheme: colorScheme,
+                    monochrome: stripMonochrome,
+                    showCodeDiffLineNumbers: transcriptCodeDiffLineNumbersEnabled,
+                    linkificationEnabled: transcriptLinkificationEnabled,
+                    sessionCwd: session.cwd,
+                    repoRootPath: sessionRepoRootPath,
+                    ideTarget: transcriptPreferredIDETarget,
+                    ideBinaryOverridePath: transcriptIDEBinaryOverridePath
+                )
+                .onChange(of: unifiedFindToken) { _, _ in handleUnifiedFindRequest() }
+                .onChange(of: findToken) { _, _ in handleFindRequest() }
+            }
+            .padding(.horizontal, 8)
+        }
+    }
+
+    private func refreshInlineImages() {
+        inlineImagesTask?.cancel()
+        inlineImagesTask = nil
+
+        guard inlineSessionImageThumbnailsEnabled else {
+            hasInlineImagesInSession = false
+            inlineImagesByUserBlockIndex = [:]
+            inlineImagesSignature = 0
+            return
+        }
+
+        guard session.source == .codex
+                || session.source == .claude
+                || session.source == .opencode
+                || session.source == .gemini
+                || session.source == .copilot
+                || session.source == .openclaw else {
+            hasInlineImagesInSession = false
+            inlineImagesByUserBlockIndex = [:]
+            inlineImagesSignature = 0
+            return
+        }
+
+        let sessionSnapshot = session
+        let sessionFileURL = URL(fileURLWithPath: sessionSnapshot.filePath)
+
+        inlineImagesTask = Task.detached(priority: .utility) { [sessionSnapshot, sessionFileURL] in
+            let outcome: (Bool, [Int: [InlineSessionImage]], Int) = { () -> (Bool, [Int: [InlineSessionImage]], Int) in
+                guard FileManager.default.fileExists(atPath: sessionFileURL.path) else { return (false, [:], 0) }
+
+                struct InlineScanResult: Hashable, Sendable {
+                    let payload: SessionImagePayload
+                    let lineIndex: Int
+                }
+
+                let hasAny: Bool = {
+                    switch sessionSnapshot.source {
+                    case .codex:
+                        return Base64ImageDataURLScanner.fileContainsBase64ImageDataURL(at: sessionFileURL, shouldCancel: { Task.isCancelled })
+                    case .claude:
+                        return ClaudeBase64ImageScanner.fileContainsUserBase64Image(at: sessionFileURL, shouldCancel: { Task.isCancelled })
+                    case .opencode:
+                        let messageIDs = Array(Set(sessionSnapshot.events.compactMap(\.messageID)).filter { $0.hasPrefix("msg_") })
+                        return OpenCodeBase64ImageScanner.fileContainsBase64ImageDataURL(sessionFileURL: sessionFileURL,
+                                                                                        messageIDs: messageIDs,
+                                                                                        shouldCancel: { Task.isCancelled })
+                    case .gemini:
+                        return GeminiInlineDataImageScanner.fileContainsInlineDataImage(at: sessionFileURL, shouldCancel: { Task.isCancelled })
+                    case .copilot:
+                        do {
+                            return try CopilotAttachmentScanner.scanFile(at: sessionFileURL, maxMatches: 1, shouldCancel: { Task.isCancelled }).isEmpty == false
+                        } catch {
+                            return false
+                        }
+                    case .openclaw:
+                        return OpenClawBase64ImageScanner.fileContainsUserBase64Image(at: sessionFileURL, shouldCancel: { Task.isCancelled })
+                    default:
+                        return false
+                    }
+                }()
+                guard hasAny, !Task.isCancelled else { return (hasAny, [:], 0) }
+
+                let located: [InlineScanResult] = {
+                    do {
+                        switch sessionSnapshot.source {
+                        case .codex:
+                            return try Base64ImageDataURLScanner
+                                .scanFileWithLineIndexes(at: sessionFileURL, maxMatches: 400, shouldCancel: { Task.isCancelled })
+                                .map { InlineScanResult(payload: .base64(sourceURL: sessionFileURL, span: $0.span), lineIndex: $0.lineIndex) }
+                        case .claude:
+                            return try ClaudeBase64ImageScanner
+                                .scanFileWithLineIndexes(at: sessionFileURL, maxMatches: 400, shouldCancel: { Task.isCancelled })
+                                .map { InlineScanResult(payload: .base64(sourceURL: sessionFileURL, span: $0.span), lineIndex: $0.lineIndex) }
+                        case .opencode:
+                            let messageIDs = Array(Set(sessionSnapshot.events.compactMap(\.messageID)).filter { $0.hasPrefix("msg_") })
+
+                            var messageToUserEventIndex: [String: Int] = [:]
+                            var messageToFirstEventIndex: [String: Int] = [:]
+                            for (idx, ev) in sessionSnapshot.events.enumerated() {
+                                guard let mid = ev.messageID, mid.hasPrefix("msg_") else { continue }
+                                if messageToFirstEventIndex[mid] == nil { messageToFirstEventIndex[mid] = idx }
+                                if ev.kind == .user, messageToUserEventIndex[mid] == nil { messageToUserEventIndex[mid] = idx }
+                            }
+
+                            let parts = try OpenCodeBase64ImageScanner.scanSessionPartFiles(sessionFileURL: sessionFileURL,
+                                                                                           messageIDs: messageIDs,
+                                                                                           maxMatches: 400,
+                                                                                           shouldCancel: { Task.isCancelled })
+                            return parts.map { part in
+                                let mid = part.messageID
+                                let eventIndex = messageToUserEventIndex[mid] ?? messageToFirstEventIndex[mid] ?? 0
+                                return InlineScanResult(payload: .base64(sourceURL: part.partFileURL, span: part.span), lineIndex: eventIndex)
+                            }
+                        case .gemini:
+                            let located = try GeminiInlineDataImageScanner.scanFile(at: sessionFileURL, maxMatches: 400, shouldCancel: { Task.isCancelled })
+                            var eventIndexByID: [String: Int] = [:]
+                            eventIndexByID.reserveCapacity(min(sessionSnapshot.events.count, 512))
+                            for (idx, ev) in sessionSnapshot.events.enumerated() {
+                                eventIndexByID[ev.id] = idx
+                            }
+                            return located.map { item in
+                                let baseID = sessionSnapshot.id + String(format: "-%04d", item.itemIndex)
+                                let eventIndex = eventIndexByID[baseID] ?? 0
+                                return InlineScanResult(payload: .base64(sourceURL: sessionFileURL, span: item.span), lineIndex: eventIndex)
+                            }
+                        case .copilot:
+                            let located = try CopilotAttachmentScanner.scanFile(at: sessionFileURL, maxMatches: 400, shouldCancel: { Task.isCancelled })
+                            var eventIndexByID: [String: Int] = [:]
+                            eventIndexByID.reserveCapacity(min(sessionSnapshot.events.count, 512))
+                            for (idx, ev) in sessionSnapshot.events.enumerated() {
+                                eventIndexByID[ev.id] = idx
+                            }
+                            return located.compactMap { att in
+                                let baseID = sessionSnapshot.id + String(format: "-%04d", att.eventSequenceIndex)
+                                let eventIndex = eventIndexByID[baseID] ?? 0
+                                return InlineScanResult(payload: .file(fileURL: att.fileURL, mediaType: att.mediaType, fileSizeBytes: att.fileSizeBytes),
+                                                       lineIndex: eventIndex)
+                            }
+                        case .openclaw:
+                            return try OpenClawBase64ImageScanner
+                                .scanFileWithLineIndexes(at: sessionFileURL, maxMatches: 400, shouldCancel: { Task.isCancelled })
+                                .map { InlineScanResult(payload: .base64(sourceURL: sessionFileURL, span: $0.span), lineIndex: $0.lineIndex) }
+                        default:
+                            return []
+                        }
+                    } catch {
+                        return []
+                    }
+                }()
+
+                let filtered: [InlineScanResult] = {
+                    switch sessionSnapshot.source {
+                    case .codex:
+                        return located.filter { item in
+                            guard case .base64(_, let span) = item.payload else { return false }
+                            return Base64ImageDataURLScanner.isLikelyImageURLContext(at: sessionFileURL, startOffset: span.startOffset)
+                        }
+                    case .claude, .opencode, .gemini, .copilot, .openclaw:
+                        return located
+                    default:
+                        return []
+                    }
+                }()
+                guard !filtered.isEmpty, !Task.isCancelled else { return (false, [:], 0) }
+
+                let blocks = SessionTranscriptBuilder.coalescedBlocks(for: sessionSnapshot, includeMeta: false)
+                var userEventIDToBlockIndex: [String: Int] = [:]
+                userEventIDToBlockIndex.reserveCapacity(64)
+                for (idx, block) in blocks.enumerated() where block.kind == .user {
+                    userEventIDToBlockIndex[block.eventID] = idx
+                }
+
+                let userEventIndices: [Int] = sessionSnapshot.events.enumerated().compactMap { (idx, ev) in
+                    ev.kind == .user ? idx : nil
+                }
+
+                let openClawEventBase: String? = {
+                    guard sessionSnapshot.source == .openclaw else { return nil }
+                    return sha256Hex(sessionFileURL.path)
+                }()
+
+                func openClawUserEventID(forFileLineIndex fileLineIndex: Int) -> String? {
+                    guard let openClawEventBase else { return nil }
+                    return openClawEventBase + String(format: "-%06d", fileLineIndex + 1)
+                }
+
+                func isPreambleUserEventIndex(_ idx: Int) -> Bool {
+                    guard sessionSnapshot.source == .codex || sessionSnapshot.source == .droid || sessionSnapshot.source == .claude || sessionSnapshot.source == .opencode else { return false }
+                    guard sessionSnapshot.events.indices.contains(idx) else { return false }
+                    guard sessionSnapshot.events[idx].kind == .user else { return false }
+                    return Session.isAgentsPreambleText(sessionSnapshot.events[idx].text ?? "")
+                }
+
+                func nearestUserEventIndex(for lineIndex: Int) -> Int? {
+                    guard !userEventIndices.isEmpty else { return nil }
+
+                    let prior = userEventIndices.filter { $0 <= lineIndex }
+                    if let preferred = prior.last(where: { !isPreambleUserEventIndex($0) }) ?? prior.last {
+                        return preferred
+                    }
+
+                    let after = userEventIndices.filter { $0 > lineIndex }
+                    if let preferred = after.first(where: { !isPreambleUserEventIndex($0) }) ?? after.first {
+                        return preferred
+                    }
+                    return nil
+                }
+
+                func userPromptIndexForLineIndex(_ lineIndex: Int) -> Int? {
+                    guard lineIndex >= 0 else { return nil }
+                    var userIndex: Int? = nil
+                    var seenUsers = 0
+                    for (idx, event) in sessionSnapshot.events.enumerated() {
+                        if event.kind == .user {
+                            if idx <= lineIndex {
+                                userIndex = seenUsers
+                            } else if userIndex == nil {
+                                userIndex = seenUsers
+                            }
+                            seenUsers += 1
+                        }
+                        if idx > lineIndex, userIndex != nil { break }
+                    }
+                    return userIndex
+                }
+
+                var out: [Int: [InlineSessionImage]] = [:]
+                out.reserveCapacity(min(16, userEventIDToBlockIndex.count))
+                var sessionImageIndex = 1
+
+	                for item in filtered {
+	                    if Task.isCancelled { break }
+
+	                    let openClawEventID = openClawUserEventID(forFileLineIndex: item.lineIndex)
+	                    let resolved: (String, Int?, Int)? = {
+	                        if let openClawEventID, let blockIndex = userEventIDToBlockIndex[openClawEventID] {
+	                            let eventIndex = sessionSnapshot.events.firstIndex(where: { $0.id == openClawEventID })
+	                            return (openClawEventID,
+	                                    eventIndex.flatMap { userPromptIndexForLineIndex($0) },
+	                                    blockIndex)
+	                        }
+
+	                        guard let targetUserEventIndex = nearestUserEventIndex(for: item.lineIndex) else { return nil }
+	                        let targetUserEventID = sessionSnapshot.events[targetUserEventIndex].id
+	                        guard let blockIndex = userEventIDToBlockIndex[targetUserEventID] else { return nil }
+	                        return (targetUserEventID, userPromptIndexForLineIndex(targetUserEventIndex), blockIndex)
+	                    }()
+	                    guard let (imageEventID, userPromptIndex, targetUserBlockIndex) = resolved else { continue }
+
+                    let img = InlineSessionImage(
+                        sessionID: sessionSnapshot.id,
+                        imageEventID: imageEventID,
+                        userPromptIndex: userPromptIndex,
+                        sessionImageIndex: sessionImageIndex,
+                        payload: item.payload
+                    )
+                    out[targetUserBlockIndex, default: []].append(img)
+                    sessionImageIndex += 1
+                }
+
+                var hasher = Hasher()
+                hasher.combine(out.values.reduce(0) { $0 + $1.count })
+                if let first = located.first {
+                    hasher.combine(first.payload.stableID)
+                }
+                if let last = located.last {
+                    hasher.combine(last.payload.stableID)
+                }
+
+                return (true, out, hasher.finalize())
+            }()
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                hasInlineImagesInSession = !outcome.1.isEmpty
+                inlineImagesByUserBlockIndex = outcome.1
+                inlineImagesSignature = outcome.2
+            }
+        }
+    }
+
+    private func imagesPill(compact: Bool = false) -> some View {
+        let isOn = inlineImagesVisibleInSession
+        let imageBlockIndices = sortedInlineImageUserBlockIndices()
+        let hasImages = !imageBlockIndices.isEmpty
+        let navDisabled = imageBlockIndices.isEmpty
+        let status = inlineImageNavigationStatus()
+        let countText = "\(formattedCount(status.current))/\(formattedCount(status.total))"
+        let toggleHelpText = hasImages
+            ? "Images \(countText). " + (isOn ? "Hide inline images in this view" : "Show inline images in this view")
+            : "Images 0/0. No images found in this session"
+
+        return HStack(spacing: 6) {
+            Button(action: {
+                inlineImagesVisibleInSession.toggle()
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.on.rectangle")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(
+                            hasImages
+                                ? (isOn ? Color.secondary : Color.secondary.opacity(0.55))
+                                : Color.secondary.opacity(0.35)
+                        )
+                    if compact {
+                        Text(countText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(hasImages ? Color.secondary : Color.secondary.opacity(0.45))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    } else {
+                        Text(countText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(hasImages ? Color.secondary : Color.secondary.opacity(0.45))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!hasImages)
+            .help(toggleHelpText)
+            .accessibilityLabel("Images \(countText)")
+
+            HStack(spacing: 4) {
+                ZStack {
+                    Button(action: { navigateInlineImages(direction: -1) }) {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(navDisabled ? Color.secondary.opacity(0.35) : Color.secondary)
+                    .disabled(navDisabled)
+                }
+                .help("Previous image prompt")
+
+                ZStack {
+                    Button(action: { navigateInlineImages(direction: 1) }) {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(navDisabled ? Color.secondary.opacity(0.35) : Color.secondary)
+                    .disabled(navDisabled)
+                }
+                .help("Next image prompt")
+            }
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    private func sortedInlineImageUserBlockIndices() -> [Int] {
+        inlineImagesByUserBlockIndex
+            .filter { !($0.value.isEmpty) }
+            .map(\.key)
+            .sorted()
+    }
+
+    private func inlineImageNavigationStatus() -> (current: Int, total: Int) {
+        let blocks = sortedInlineImageUserBlockIndices()
+        let total = blocks.count
+        guard total > 0 else { return (0, 0) }
+
+        if let selected = selectedInlineImageUserBlockIndex, let pos = blocks.firstIndex(of: selected) {
+            return (pos + 1, total)
+        }
+        return (1, total)
+    }
+
+    private func navigateInlineImages(direction: Int) {
+        let blocks = sortedInlineImageUserBlockIndices()
+        guard !blocks.isEmpty else { return }
+
+        let count = blocks.count
+
+        func wrapIndex(_ value: Int) -> Int {
+            (value % count + count) % count
+        }
+
+        let nextIndex: Int = {
+            if let selected = selectedInlineImageUserBlockIndex, let pos = blocks.firstIndex(of: selected) {
+                let step = direction >= 0 ? 1 : -1
+                return wrapIndex(pos + step)
+            }
+            return direction >= 0 ? 0 : (count - 1)
+        }()
+
+        let targetUserBlockIndex = blocks[nextIndex]
+        selectedInlineImageUserBlockIndex = targetUserBlockIndex
+
+        guard let eventID = eventIDForUserBlockIndex(targetUserBlockIndex) else { return }
+        _ = jumpToEventID(eventID)
+    }
+
+    private func eventIDForUserBlockIndex(_ userBlockIndex: Int) -> String? {
+        let blocks = SessionTranscriptBuilder.coalescedBlocks(for: session, includeMeta: false)
+        guard blocks.indices.contains(userBlockIndex) else { return nil }
+        return blocks[userBlockIndex].eventID
+    }
+
+    private func updateSelectedInlineImageBlockIndex(forUserPromptIndex userPromptIndex: Int) {
+        for (blockIndex, images) in inlineImagesByUserBlockIndex {
+            if images.contains(where: { $0.userPromptIndex == userPromptIndex }) {
+                selectedInlineImageUserBlockIndex = blockIndex
+                return
+            }
+        }
+    }
+
+    private func updateSelectedInlineImageBlockIndex(forEventID eventID: String) {
+        for (blockIndex, images) in inlineImagesByUserBlockIndex {
+            if images.contains(where: { $0.imageEventID == eventID }) {
+                selectedInlineImageUserBlockIndex = blockIndex
+                return
+            }
+        }
+
+        let blocks = SessionTranscriptBuilder.coalescedBlocks(for: session, includeMeta: false)
+        if let matchIndex = blocks.firstIndex(where: { $0.eventID == eventID }) {
+            if !(inlineImagesByUserBlockIndex[matchIndex]?.isEmpty ?? true) {
+                selectedInlineImageUserBlockIndex = matchIndex
+            }
+        }
+    }
+
+    private struct RebuildResult: Sendable {
+        let lines: [TerminalLine]
+        let conversationStartLineID: Int?
+        let preambleUserBlockIndexes: Set<Int>
+        let userLineIndices: [Int]
+        let assistantLineIndices: [Int]
+        let toolLineIndices: [Int]
+        let errorLineIndices: [Int]
+        let eventIDToUserLineID: [String: Int]
+    }
+
+    private func rebuildLines(priority: TaskPriority, debounceNanoseconds: UInt64 = 0) {
+        rebuildTask?.cancel()
+
+        let sessionSnapshot = session
+        let skipAgentsPreamble = skipAgentsPreambleEnabled()
+        let reviewCardsEnabled = transcriptReviewCardsEnabled
+
+        rebuildTask = Task.detached(priority: priority) { [sessionSnapshot, skipAgentsPreamble, reviewCardsEnabled, debounceNanoseconds] in
+            if debounceNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: debounceNanoseconds)
+            }
+            guard !Task.isCancelled else { return }
+
+            let result = Self.buildRebuildResult(session: sessionSnapshot,
+                                                 skipAgentsPreamble: skipAgentsPreamble,
+                                                 enableReviewCards: reviewCardsEnabled)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+
+                let priorLines = lines
+                let appendOnlyUpdate: Bool = {
+                    if case .append = Self.tailPatchStrategy(previous: priorLines, current: result.lines) {
+                        return true
+                    }
+                    return false
+                }()
+
+                lines = result.lines
+                visibleLines = applyLineFilters(result.lines)
+                visibleLinesSignature = Self.stableLineSignature(for: visibleLines)
+                fullSnapshot = buildTextSnapshot(lines: result.lines)
+                visibleSnapshot = buildTextSnapshot(lines: visibleLines)
+                conversationStartLineID = result.conversationStartLineID
+                preambleUserBlockIndexes = result.preambleUserBlockIndexes
+                userLineIndices = result.userLineIndices
+                assistantLineIndices = result.assistantLineIndices
+                toolLineIndices = result.toolLineIndices
+                errorLineIndices = result.errorLineIndices
+                eventIDToUserLineID = result.eventIDToUserLineID
+
+                if let pendingIndex = pendingUserPromptIndex, jumpToUserPromptIndex(pendingIndex) {
+                    pendingUserPromptIndex = nil
+                }
+                if let pending = pendingEventJumpID, jumpToEventID(pending) {
+                    pendingEventJumpID = nil
+                }
+
+                if lastReportedRenderSessionID != sessionSnapshot.id {
+                    lastReportedRenderSessionID = sessionSnapshot.id
+                    DispatchQueue.main.async {
+                        onRenderComplete(sessionSnapshot.id)
+                    }
+                }
+
+                if appendOnlyUpdate {
+                    if !unifiedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        recomputeUnifiedMatches(resetIndex: false, preserveCurrentLine: true)
+                    } else {
+                        unifiedMatchOccurrences = []
+                        unifiedCurrentMatchLineID = nil
+                        unifiedExternalMatchCount = 0
+                        unifiedExternalTotalMatchCount = 0
+                        unifiedExternalCurrentMatchIndex = 0
+                    }
+
+                    if !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        recomputeFindMatches(resetIndex: false, preserveCurrentLine: true)
+                    } else {
+                        findMatchOccurrences = []
+                        findCurrentMatchLineID = nil
+                        externalMatchCount = 0
+                        externalTotalMatchCount = 0
+                        externalCurrentMatchIndex = 0
+                    }
+                } else {
+                    // Reset Unified Search + Find state when rebuilding from a non-append change.
+                    unifiedMatchOccurrences = []
+                    unifiedCurrentMatchLineID = nil
+                    unifiedExternalMatchCount = 0
+                    unifiedExternalTotalMatchCount = 0
+                    unifiedExternalCurrentMatchIndex = 0
+
+                    findMatchOccurrences = []
+                    findCurrentMatchLineID = nil
+                    roleNavPositions = [:]
+                    semanticNavPositions = [:]
+                    externalMatchCount = 0
+                    externalTotalMatchCount = 0
+                    externalCurrentMatchIndex = 0
+
+                    if !unifiedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        recomputeUnifiedMatches(resetIndex: true)
+                    }
+                    if !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        recomputeFindMatches(resetIndex: true)
+                    }
+                }
+
+                if unifiedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    applyAutoScrollIfNeeded(sessionID: sessionSnapshot.id, skipAgentsPreamble: skipAgentsPreamble)
+                }
+            }
+        }
+    }
+
+    private func refreshVisibleLinesAndMatches() {
+        visibleLines = applyLineFilters(lines)
+        visibleLinesSignature = Self.stableLineSignature(for: visibleLines)
+        visibleSnapshot = buildTextSnapshot(lines: visibleLines)
+        roleNavPositions = [:]
+        semanticNavPositions = [:]
+        if !unifiedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            recomputeUnifiedMatches(resetIndex: true)
+        }
+        if !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            recomputeFindMatches(resetIndex: true)
+        }
+    }
+
+    private func applyLineFilters(_ source: [TerminalLine]) -> [TerminalLine] {
+        semanticFilteredLines(from: roleFilteredLines(from: source))
+    }
+
+    private func roleFilteredLines(from lines: [TerminalLine]) -> [TerminalLine] {
+        guard !activeRoles.isEmpty else { return lines }
+        return lines.filter { line in
+            switch line.role {
+            case .user:
+                return activeRoles.contains(.user)
+            case .assistant:
+                return activeRoles.contains(.assistant)
+            case .toolInput, .toolOutput:
+                return activeRoles.contains(.tools)
+            case .error:
+                return activeRoles.contains(.errors)
+            case .meta:
+                return true
+            }
+        }
+    }
+
+    private func semanticFilteredLines(from source: [TerminalLine]) -> [TerminalLine] {
+        guard activeSemanticKinds != Self.allSemanticKinds else { return source }
+        return source.filter { line in
+            guard let semanticKind = line.semanticKind else { return true }
+            return activeSemanticKinds.contains(semanticKind)
+        }
+    }
+
+    nonisolated private static func buildRebuildResult(session: Session,
+                                                       skipAgentsPreamble: Bool,
+                                                       enableReviewCards: Bool) -> RebuildResult {
+        let blocks = SessionTranscriptBuilder.coalescedBlocks(for: session, includeMeta: false)
+        let built = TerminalBuilder.buildLines(for: session, showMeta: false, enableReviewCards: enableReviewCards)
+        let startLineID = conversationStartLineIDIfNeeded(session: session, lines: built, enabled: skipAgentsPreamble)
+        let preambleUserBlockIndexes = computePreambleUserBlockIndexes(session: session)
+
+        // Collapse multi-line blocks into single navigable/message entries per role.
+        var firstLineForBlock: [Int: Int] = [:]       // blockIndex -> first line id
+        var roleForBlock: [Int: TerminalLineRole] = [:]
+        var toolGroupKeyForBlock: [Int: String] = [:]
+        var lastToolGroupKey: String? = nil
+        var lastToolName: String? = nil
+
+        for line in built {
+            guard let blockIndex = line.blockIndex else { continue }
+            if firstLineForBlock[blockIndex] == nil {
+                firstLineForBlock[blockIndex] = line.id
+                roleForBlock[blockIndex] = line.role
+            }
+        }
+
+        var eventIDToUserLineID: [String: Int] = [:]
+        if !blocks.isEmpty {
+            let userBlockIndices = blocks.enumerated().compactMap { $0.element.kind == .user ? $0.offset : nil }
+
+            func nearestUserBlockIndex(for idx: Int) -> Int? {
+                let prior = userBlockIndices.filter { $0 <= idx }
+                if let preferred = prior.last(where: { !preambleUserBlockIndexes.contains($0) }) ?? prior.last {
+                    return preferred
+                }
+                let after = userBlockIndices.filter { $0 > idx }
+                if let preferred = after.first(where: { !preambleUserBlockIndexes.contains($0) }) ?? after.first {
+                    return preferred
+                }
+                return nil
+            }
+
+            for (idx, block) in blocks.enumerated() {
+                let targetUserBlock: Int?
+                if block.kind == .user {
+                    targetUserBlock = idx
+                } else {
+                    targetUserBlock = nearestUserBlockIndex(for: idx)
+                }
+                guard let targetUserBlock,
+                      let lineID = firstLineForBlock[targetUserBlock] else { continue }
+                eventIDToUserLineID[block.eventID] = lineID
+            }
+        }
+
+        if !blocks.isEmpty {
+            for (idx, block) in blocks.enumerated() {
+                guard block.kind == .toolCall || block.kind == .toolOut else {
+                    lastToolGroupKey = nil
+                    lastToolName = nil
+                    continue
+                }
+
+                let normalizedName = block.toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                var derivedKey: String? = nil
+
+                if let toolBlock = ToolTextBlockNormalizer.normalize(block: block, source: session.source),
+                   let groupKey = toolBlock.groupKey,
+                   !groupKey.isEmpty {
+                    derivedKey = groupKey
+                }
+
+                if derivedKey == nil,
+                   block.kind == .toolOut,
+                   let last = lastToolGroupKey {
+                    if let lastName = lastToolName, let normalizedName {
+                        if lastName == normalizedName { derivedKey = last }
+                    } else {
+                        derivedKey = last
+                    }
+                }
+
+                if derivedKey == nil {
+                    derivedKey = "tool-block-\(idx)"
+                }
+
+                toolGroupKeyForBlock[idx] = derivedKey
+                lastToolGroupKey = derivedKey
+                if let normalizedName { lastToolName = normalizedName }
+            }
+        }
+
+        func messageIDs(for roleMatch: (TerminalLineRole) -> Bool) -> [Int] {
+            firstLineForBlock.compactMap { blockIndex, lineID in
+                guard let role = roleForBlock[blockIndex], roleMatch(role) else { return nil }
+                return lineID
+            }
+            .sorted()
+        }
+
+        func toolMessageIDs() -> [Int] {
+            var grouped: [String: Int] = [:]
+            for (blockIndex, lineID) in firstLineForBlock {
+                guard let role = roleForBlock[blockIndex], role == .toolInput || role == .toolOutput else { continue }
+                let key = toolGroupKeyForBlock[blockIndex] ?? "tool-block-\(blockIndex)"
+                if let existing = grouped[key] {
+                    grouped[key] = min(existing, lineID)
+                } else {
+                    grouped[key] = lineID
+                }
+            }
+            return grouped.values.sorted()
+        }
+
+        return RebuildResult(
+            lines: built,
+            conversationStartLineID: startLineID,
+            preambleUserBlockIndexes: preambleUserBlockIndexes,
+            userLineIndices: messageIDs { $0 == .user },
+            assistantLineIndices: messageIDs { $0 == .assistant },
+            toolLineIndices: toolMessageIDs(),
+            errorLineIndices: messageIDs { $0 == .error },
+            eventIDToUserLineID: eventIDToUserLineID
+        )
+    }
+
+    enum TailPatchStrategy: Equatable {
+        case append(startIndex: Int)
+        case replaceSuffix(startIndex: Int)
+    }
+
+    nonisolated static func tailPatchStrategy(previous: [TerminalLine],
+                                              current: [TerminalLine]) -> TailPatchStrategy? {
+        guard !previous.isEmpty else { return nil }
+        guard !current.isEmpty else { return nil }
+
+        let sharedCount = min(previous.count, current.count)
+        var prefixCount = 0
+        while prefixCount < sharedCount,
+              lineIdentityMatches(previous[prefixCount], current[prefixCount]) {
+            prefixCount += 1
+        }
+
+        guard prefixCount > 0 else { return nil }
+
+        if prefixCount == previous.count, current.count > previous.count {
+            return .append(startIndex: previous.count)
+        }
+
+        return .replaceSuffix(startIndex: prefixCount)
+    }
+
+    nonisolated static func stableLineSignature(for lines: [TerminalLine]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(lines.count)
+        for line in lines {
+            hasher.combine(line.id)
+            hasher.combine(line.role.signatureToken)
+            hasher.combine(line.text)
+            hasher.combine(line.blockIndex ?? -1)
+            hasher.combine(line.decorationGroupID)
+            hasher.combine(semanticSignatureToken(for: line.semanticKind))
+        }
+        return hasher.finalize()
+    }
+
+    nonisolated private static func lineIdentityMatches(_ lhs: TerminalLine, _ rhs: TerminalLine) -> Bool {
+        lhs.id == rhs.id
+            && lhs.role == rhs.role
+            && lhs.text == rhs.text
+            && lhs.blockIndex == rhs.blockIndex
+            && lhs.decorationGroupID == rhs.decorationGroupID
+            && lhs.semanticKind == rhs.semanticKind
+    }
+
+    nonisolated private static func semanticSignatureToken(for semanticKind: SemanticKind?) -> Int {
+        guard let semanticKind else { return 0 }
+        switch semanticKind {
+        case .reviewSummary: return 1
+        case .plan: return 2
+        case .code: return 3
+        case .diff: return 4
+        }
+    }
+
+    nonisolated private static func computePreambleUserBlockIndexes(session: Session) -> Set<Int> {
+        // Only style preamble differently for Codex + Droid, where the "system prompt" is commonly embedded
+        // as a user-authored-looking block.
+        guard session.source == .codex || session.source == .droid else { return [] }
+
+        let blocks = SessionTranscriptBuilder.coalescedBlocks(for: session, includeMeta: false)
+        var out: Set<Int> = []
+        out.reserveCapacity(4)
+        for (idx, block) in blocks.enumerated() where block.kind == .user {
+            if Session.isAgentsPreambleText(block.text) {
+                out.insert(idx)
+            }
+        }
+        return out
+    }
+
+    nonisolated private static func repoRootPath(from cwd: String?) -> String? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        let fm = FileManager.default
+        var url = URL(fileURLWithPath: cwd)
+
+        for _ in 0..<12 {
+            let dotGitURL = url.appendingPathComponent(".git", isDirectory: false)
+            if fm.fileExists(atPath: dotGitURL.path) {
+                return url.path
+            }
+            let parent = url.deletingLastPathComponent()
+            if parent.path == url.path { break }
+            url = parent
+        }
+        return nil
+    }
+
+    private func loadRoleToggles() {
+        let parts = roleToggleRaw.split(separator: ",").map { String($0) }
+        var roles: Set<RoleToggle> = []
+        for p in parts {
+            switch p {
+            case "user": roles.insert(.user)
+            case "assistant": roles.insert(.assistant)
+            case "tools": roles.insert(.tools)
+            case "errors": roles.insert(.errors)
+            default: break
+            }
+        }
+        if roles.isEmpty { roles = Set(RoleToggle.allCases) }
+        activeRoles = roles
+    }
+
+    private func loadSemanticToggles() {
+        let parts = semanticToggleRaw.split(separator: ",").map { String($0) }
+        var kinds: Set<SemanticKind> = []
+        for part in parts {
+            switch part {
+            case "plan": kinds.insert(.plan)
+            case "code": kinds.insert(.code)
+            case "diff": kinds.insert(.diff)
+            case "review": kinds.insert(.reviewSummary)
+            default: break
+            }
+        }
+        if kinds.isEmpty {
+            kinds = Self.allSemanticKinds
+        }
+        activeSemanticKinds = kinds
+    }
+
+    private func persistRoleToggles() {
+        let parts = activeRoles.map { role -> String in
+            switch role {
+            case .user: return "user"
+            case .assistant: return "assistant"
+            case .tools: return "tools"
+            case .errors: return "errors"
+            }
+        }
+        roleToggleRaw = parts.joined(separator: ",")
+    }
+
+    private func persistSemanticToggles() {
+        let parts = activeSemanticKinds.map { kind -> String in
+            switch kind {
+            case .plan: return "plan"
+            case .code: return "code"
+            case .diff: return "diff"
+            case .reviewSummary: return "review"
+            }
+        }
+        semanticToggleRaw = parts.joined(separator: ",")
+    }
+
+    private func allFilterButton() -> some View {
+        let isActive = activeRoles.count == RoleToggle.allCases.count && activeSemanticKinds == Self.allSemanticKinds
+        return Button(action: {
+            activeRoles = Set(RoleToggle.allCases)
+            activeSemanticKinds = Self.allSemanticKinds
+            persistRoleToggles()
+            persistSemanticToggles()
+        }) {
+            Text("All")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isActive ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func legendToggle(label: String, role: RoleToggle, compact: Bool = false) -> some View {
+        let isOn = activeRoles.contains(role)
+        let swatch = TerminalRolePalette.swiftUI(
+            role: TerminalRolePalette.role(for: role),
+            sessionSource: role == .assistant ? session.source : nil,
+            scheme: colorScheme,
+            monochrome: stripMonochrome
+        )
+        let navDisabled = !isOn || indicesForRole(role).isEmpty
+        let status = navigationStatus(for: role)
+        let countText = "\(formattedCount(status.current))/\(formattedCount(status.total))"
+        let helpText = "\(label) \(countText). " + toggleHelpText(for: role)
+
+        return HStack(spacing: 6) {
+            Button(action: {
+                if isOn {
+                    activeRoles.remove(role)
+                } else {
+                    activeRoles.insert(role)
+                }
+                persistRoleToggles()
+            }) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(swatch.accent.opacity(isOn ? 1.0 : 0.35))
+                        .frame(width: 9, height: 9)
+                    if compact {
+                        Text(countText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    } else {
+                        Text(label)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(isOn ? .primary : .secondary)
+                            .lineLimit(1)
+                        Text(countText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help(helpText)
+            .accessibilityLabel("\(label) \(countText)")
+
+            HStack(spacing: 4) {
+                ZStack {
+                    Button(action: { navigateRole(role, direction: -1) }) {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(navDisabled ? Color.secondary.opacity(0.35) : Color.secondary)
+                    .disabled(navDisabled)
+                }
+                .help(previousHelpText(for: role))
+
+                ZStack {
+                    Button(action: { navigateRole(role, direction: 1) }) {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(navDisabled ? Color.secondary.opacity(0.35) : Color.secondary)
+                    .disabled(navDisabled)
+                }
+                .help(nextHelpText(for: role))
+            }
+        }
+    }
+
+    private func semanticToggle(label: String, kind: SemanticKind, compact: Bool = false) -> some View {
+        let isOn = activeSemanticKinds.contains(kind)
+        let accent = Color(nsColor: TranscriptColorSystem.semanticAccent(accentRole(for: kind)))
+        let semanticVisibleLines = semanticLineIndices(kind, in: visibleLines)
+        let navDisabled = !isOn || semanticVisibleLines.isEmpty
+        let status = semanticNavigationStatus(for: kind, in: visibleLines)
+        let countText = "\(formattedCount(status.current))/\(formattedCount(status.total))"
+        let helpText = "\(label) \(countText). " + semanticToggleHelpText(for: kind)
+
+        return HStack(spacing: 6) {
+            Button(action: {
+                if isOn {
+                    activeSemanticKinds.remove(kind)
+                } else {
+                    activeSemanticKinds.insert(kind)
+                }
+                persistSemanticToggles()
+            }) {
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(accent.opacity(isOn ? 1.0 : 0.35))
+                        .frame(width: 9, height: 9)
+                    if compact {
+                        Text(countText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    } else {
+                        Text(label)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(isOn ? .primary : .secondary)
+                            .lineLimit(1)
+                        Text(countText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help(helpText)
+            .accessibilityLabel("\(label) \(countText)")
+
+            HStack(spacing: 4) {
+                ZStack {
+                    Button(action: { navigateSemantic(kind, direction: -1) }) {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(navDisabled ? Color.secondary.opacity(0.35) : Color.secondary)
+                    .disabled(navDisabled)
+                }
+                .help(previousSemanticHelpText(for: kind))
+
+                ZStack {
+                    Button(action: { navigateSemantic(kind, direction: 1) }) {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(navDisabled ? Color.secondary.opacity(0.35) : Color.secondary)
+                    .disabled(navDisabled)
+                }
+                .help(nextSemanticHelpText(for: kind))
+            }
+        }
+    }
+
+    private func formattedCount(_ count: Int) -> String {
+        let clamped = min(max(count, 0), 999_999)
+        let base = clamped.formatted(.number.grouping(.automatic))
+        if count > 999_999 {
+            return base + "+"
+        }
+        return base
+    }
+
+    private func navigationStatus(for role: RoleToggle) -> (current: Int, total: Int) {
+        let ids = indicesForRole(role)
+        let total = ids.count
+        guard total > 0 else { return (0, 0) }
+        let sorted = ids.sorted()
+
+        if let stored = roleNavPositions[role], stored >= 0, stored < total {
+            return (stored + 1, total)
+        }
+
+        if let currentID = unifiedCurrentMatchLineID, let pos = sorted.firstIndex(of: currentID) {
+            return (pos + 1, total)
+        }
+
+        return (0, total)
+    }
+
+    private func semanticNavigationStatus(for kind: SemanticKind, in source: [TerminalLine]) -> (current: Int, total: Int) {
+        let ids = semanticLineIndices(kind, in: source)
+        let total = ids.count
+        guard total > 0 else { return (0, 0) }
+        let sorted = ids.sorted()
+
+        if let stored = semanticNavPositions[kind], stored >= 0, stored < total {
+            return (stored + 1, total)
+        }
+
+        if let currentID = unifiedCurrentMatchLineID, let pos = sorted.firstIndex(of: currentID) {
+            return (pos + 1, total)
+        }
+
+        return (0, total)
+    }
+
+    private func semanticLineIndices(_ kind: SemanticKind, in source: [TerminalLine]) -> [Int] {
+        var seenGroups: Set<Int> = []
+        var out: [Int] = []
+        for line in source {
+            guard line.semanticKind == kind else { continue }
+            if seenGroups.insert(line.decorationGroupID).inserted {
+                out.append(line.id)
+            }
+        }
+        return out.sorted()
+    }
+
+    private func accentRole(for kind: SemanticKind) -> TranscriptColorSystem.SemanticRole {
+        switch kind {
+        case .plan: return .plan
+        case .code: return .code
+        case .diff: return .diff
+        case .reviewSummary: return .reviewSummary
+        }
+    }
+
+    private func indicesForRole(_ role: RoleToggle) -> [Int] {
+        let visibleLineIDs = Set(visibleLines.map(\.id))
+        return allIndicesForRole(role).filter { visibleLineIDs.contains($0) }
+    }
+
+    private func allIndicesForRole(_ role: RoleToggle) -> [Int] {
+        switch role {
+        case .user: return userLineIndices
+        case .assistant: return assistantLineIndices
+        case .tools: return toolLineIndices
+        case .errors: return errorLineIndices
+        }
+    }
+
+    private func hasRoleItems(_ role: RoleToggle) -> Bool {
+        !allIndicesForRole(role).isEmpty
+    }
+
+    private func hasSemanticItems(_ kind: SemanticKind) -> Bool {
+        !semanticLineIndices(kind, in: lines).isEmpty
+    }
+
+    private func previousHelpText(for role: RoleToggle) -> String {
+        switch role {
+        case .user: return "Previous user prompt (⌥⌘↑)"
+        case .assistant: return "Previous agent response"
+        case .tools: return "Previous tool call/output (⌥⌘←)"
+        case .errors: return "Previous error (⌥⌘⇧↑)"
+        }
+    }
+
+    private func toggleHelpText(for role: RoleToggle) -> String {
+        switch role {
+        case .user: return "Show/hide user prompts"
+        case .assistant: return "Show/hide agent responses"
+        case .tools: return "Show/hide tool calls and outputs"
+        case .errors: return "Show/hide errors"
+        }
+    }
+
+    private func nextHelpText(for role: RoleToggle) -> String {
+        switch role {
+        case .user: return "Next user prompt (⌥⌘↓)"
+        case .assistant: return "Next agent response"
+        case .tools: return "Next tool call/output (⌥⌘→)"
+        case .errors: return "Next error (⌥⌘⇧↓)"
+        }
+    }
+
+    private func roleLabel(for role: RoleToggle) -> String {
+        switch role {
+        case .user: return "User"
+        case .assistant: return agentLegendLabel
+        case .tools: return "Tools"
+        case .errors: return "Errors"
+        }
+    }
+
+    private func roleCountText(_ role: RoleToggle) -> String {
+        let status = navigationStatus(for: role)
+        return "\(formattedCount(status.current))/\(formattedCount(status.total))"
+    }
+
+    private func semanticDisplayLabel(for kind: SemanticKind) -> String {
+        switch kind {
+        case .plan: return "Plans"
+        case .code: return "Code"
+        case .diff: return "Diffs"
+        case .reviewSummary: return "Reviews"
+        }
+    }
+
+    private func semanticCountText(_ kind: SemanticKind) -> String {
+        let status = semanticNavigationStatus(for: kind, in: visibleLines)
+        return "\(formattedCount(status.current))/\(formattedCount(status.total))"
+    }
+
+    private func imagesCountText() -> String {
+        let status = inlineImageNavigationStatus()
+        return "\(formattedCount(status.current))/\(formattedCount(status.total))"
+    }
+
+    private func semanticLabel(for kind: SemanticKind) -> String {
+        switch kind {
+        case .plan: return "plans"
+        case .code: return "code blocks"
+        case .diff: return "diff blocks"
+        case .reviewSummary: return "review cards"
+        }
+    }
+
+    private func semanticToggleHelpText(for kind: SemanticKind) -> String {
+        "Show/hide \(semanticLabel(for: kind))"
+    }
+
+    private func previousSemanticHelpText(for kind: SemanticKind) -> String {
+        "Previous \(semanticLabel(for: kind))"
+    }
+
+    private func nextSemanticHelpText(for kind: SemanticKind) -> String {
+        "Next \(semanticLabel(for: kind))"
+    }
+
+    private func navigateRole(_ role: RoleToggle, direction: Int) {
+        guard activeRoles.contains(role) else { return }
+        let ids = indicesForRole(role)
+        guard !ids.isEmpty else { return }
+
+        let sorted = ids.sorted()
+        let step = direction >= 0 ? 1 : -1
+        let count = sorted.count
+
+        func wrapIndex(_ value: Int) -> Int {
+            (value % count + count) % count
+        }
+
+        let startIndex: Int
+        if let stored = roleNavPositions[role], stored >= 0, stored < count {
+            startIndex = stored
+        } else if let currentID = unifiedCurrentMatchLineID, let pos = sorted.firstIndex(of: currentID) {
+            startIndex = pos
+        } else {
+            startIndex = direction >= 0 ? 0 : (count - 1)
+        }
+
+        let nextIndex = wrapIndex(startIndex + step)
+        roleNavPositions[role] = nextIndex
+        unifiedCurrentMatchLineID = sorted[nextIndex]
+        roleNavScrollTargetLineID = sorted[nextIndex]
+        roleNavScrollToken &+= 1
+    }
+
+    private func navigateSemantic(_ kind: SemanticKind, direction: Int) {
+        guard activeSemanticKinds.contains(kind) else { return }
+        let ids = semanticLineIndices(kind, in: visibleLines)
+        guard !ids.isEmpty else { return }
+
+        let sorted = ids.sorted()
+        let step = direction >= 0 ? 1 : -1
+        let count = sorted.count
+
+        func wrapIndex(_ value: Int) -> Int {
+            (value % count + count) % count
+        }
+
+        let startIndex: Int
+        if let stored = semanticNavPositions[kind], stored >= 0, stored < count {
+            startIndex = stored
+        } else if let currentID = unifiedCurrentMatchLineID, let pos = sorted.firstIndex(of: currentID) {
+            startIndex = pos
+        } else {
+            startIndex = direction >= 0 ? 0 : (count - 1)
+        }
+
+        let nextIndex = wrapIndex(startIndex + step)
+        semanticNavPositions[kind] = nextIndex
+        unifiedCurrentMatchLineID = sorted[nextIndex]
+        roleNavScrollTargetLineID = sorted[nextIndex]
+        roleNavScrollToken &+= 1
+    }
+
+    /// Execute a Unified Search request driven by the sessions list.
+    private func handleUnifiedFindRequest() {
+        recomputeUnifiedMatches(resetIndex: unifiedFindReset, direction: unifiedFindDirection)
+    }
+
+    /// Execute a local Find request driven by the find bar.
+    private func handleFindRequest() {
+        recomputeFindMatches(resetIndex: findReset, direction: findDirection)
+    }
+
+    private func recomputeUnifiedMatches(resetIndex: Bool,
+                                         direction: Int = 1,
+                                         preserveCurrentLine: Bool = false) {
+        let query = unifiedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            unifiedMatchOccurrences = []
+            unifiedCurrentMatchLineID = nil
+            unifiedExternalMatchCount = 0
+            unifiedExternalTotalMatchCount = 0
+            unifiedExternalCurrentMatchIndex = 0
+            return
+        }
+
+        let visibleRanges = SearchTextMatcher.matchRanges(in: visibleSnapshot.text, query: query)
+        let visibleOccurrences = occurrences(from: visibleRanges, in: visibleSnapshot)
+        unifiedMatchOccurrences = visibleOccurrences
+        unifiedExternalMatchCount = visibleOccurrences.count
+
+        let totalRanges = SearchTextMatcher.matchRanges(in: fullSnapshot.text, query: query)
+        unifiedExternalTotalMatchCount = totalRanges.count
+
+        guard !visibleOccurrences.isEmpty else {
+            unifiedCurrentMatchLineID = nil
+            unifiedExternalCurrentMatchIndex = 0
+            return
+        }
+
+        // Determine which match to select.
+        if preserveCurrentLine,
+           let currentLineID = unifiedCurrentMatchLineID,
+           let preservedIndex = visibleOccurrences.firstIndex(where: { $0.lineID == currentLineID }) {
+            unifiedExternalCurrentMatchIndex = preservedIndex
+        } else if resetIndex {
+            unifiedExternalCurrentMatchIndex = 0
+        } else if preserveCurrentLine {
+            unifiedExternalCurrentMatchIndex = min(max(unifiedExternalCurrentMatchIndex, 0), visibleOccurrences.count - 1)
+        } else {
+            var nextIndex = unifiedExternalCurrentMatchIndex + (direction >= 0 ? 1 : -1)
+            if nextIndex < 0 {
+                nextIndex = visibleOccurrences.count - 1
+            } else if nextIndex >= visibleOccurrences.count {
+                nextIndex = 0
+            }
+            unifiedExternalCurrentMatchIndex = nextIndex
+        }
+
+        let clampedIndex = min(max(unifiedExternalCurrentMatchIndex, 0), visibleOccurrences.count - 1)
+        unifiedCurrentMatchLineID = visibleOccurrences[clampedIndex].lineID
+    }
+
+    private func recomputeFindMatches(resetIndex: Bool,
+                                      direction: Int = 1,
+                                      preserveCurrentLine: Bool = false) {
+        let query = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            findMatchOccurrences = []
+            findCurrentMatchLineID = nil
+            externalMatchCount = 0
+            externalTotalMatchCount = 0
+            externalCurrentMatchIndex = 0
+            return
+        }
+
+        let visibleRanges = SearchTextMatcher.matchRanges(in: visibleSnapshot.text, query: query)
+        let visibleOccurrences = occurrences(from: visibleRanges, in: visibleSnapshot)
+        findMatchOccurrences = visibleOccurrences
+        externalMatchCount = visibleOccurrences.count
+
+        let totalRanges = SearchTextMatcher.matchRanges(in: fullSnapshot.text, query: query)
+        externalTotalMatchCount = totalRanges.count
+
+        guard !visibleOccurrences.isEmpty else {
+            findCurrentMatchLineID = nil
+            externalCurrentMatchIndex = 0
+            return
+        }
+
+        if preserveCurrentLine,
+           let currentLineID = findCurrentMatchLineID,
+           let preservedIndex = visibleOccurrences.firstIndex(where: { $0.lineID == currentLineID }) {
+            externalCurrentMatchIndex = preservedIndex
+        } else if resetIndex {
+            externalCurrentMatchIndex = 0
+        } else if preserveCurrentLine {
+            externalCurrentMatchIndex = min(max(externalCurrentMatchIndex, 0), visibleOccurrences.count - 1)
+        } else {
+            var nextIndex = externalCurrentMatchIndex + (direction >= 0 ? 1 : -1)
+            if nextIndex < 0 {
+                nextIndex = visibleOccurrences.count - 1
+            } else if nextIndex >= visibleOccurrences.count {
+                nextIndex = 0
+            }
+            externalCurrentMatchIndex = nextIndex
+        }
+
+        let clampedIndex = min(max(externalCurrentMatchIndex, 0), visibleOccurrences.count - 1)
+        findCurrentMatchLineID = visibleOccurrences[clampedIndex].lineID
+    }
+
+    private func buildTextSnapshot(lines: [TerminalLine]) -> TextSnapshot {
+        guard !lines.isEmpty else { return .empty }
+        var text = ""
+        text.reserveCapacity(lines.count * 32)
+        var lineRanges: [Int: NSRange] = [:]
+        lineRanges.reserveCapacity(lines.count)
+        var orderedLineRanges: [NSRange] = []
+        orderedLineRanges.reserveCapacity(lines.count)
+        var orderedLineIDs: [Int] = []
+        orderedLineIDs.reserveCapacity(lines.count)
+
+        var location = 0
+        var semanticLineNumberCounters: [Int: Int] = [:]
+        semanticLineNumberCounters.reserveCapacity(32)
+        for (idx, line) in lines.enumerated() {
+            let previousDecorationGroupID = idx > 0 ? lines[idx - 1].decorationGroupID : nil
+            let isFirstLineOfBlock = previousDecorationGroupID != line.decorationGroupID
+            let renderedText = renderedTranscriptLineText(line,
+                                                          showCodeDiffLineNumbers: transcriptCodeDiffLineNumbersEnabled,
+                                                          isFirstLineOfBlock: isFirstLineOfBlock,
+                                                          semanticLineNumberCounters: &semanticLineNumberCounters).text
+            let lineString = idx == lines.count - 1 ? renderedText : renderedText + "\n"
+            let length = lineString.utf16.count
+            let range = NSRange(location: location, length: length)
+            text.append(lineString)
+            lineRanges[line.id] = range
+            orderedLineRanges.append(range)
+            orderedLineIDs.append(line.id)
+            location += length
+        }
+
+        return TextSnapshot(text: text,
+                            lineRanges: lineRanges,
+                            orderedLineRanges: orderedLineRanges,
+                            orderedLineIDs: orderedLineIDs)
+    }
+
+    private func occurrences(from ranges: [NSRange], in snapshot: TextSnapshot) -> [MatchOccurrence] {
+        guard !ranges.isEmpty else { return [] }
+        var out: [MatchOccurrence] = []
+        out.reserveCapacity(ranges.count)
+        for range in ranges {
+            guard let lineID = lineID(for: range.location, in: snapshot) else { continue }
+            out.append(MatchOccurrence(range: range, lineID: lineID))
+        }
+        return out
+    }
+
+    private func lineID(for location: Int, in snapshot: TextSnapshot) -> Int? {
+        let ranges = snapshot.orderedLineRanges
+        let ids = snapshot.orderedLineIDs
+        guard !ranges.isEmpty else { return nil }
+
+        var low = 0
+        var high = ranges.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            let r = ranges[mid]
+            if location < r.location {
+                high = mid - 1
+                continue
+            }
+            if location >= (r.location + r.length) {
+                low = mid + 1
+                continue
+            }
+            return ids[mid]
+        }
+        return nil
+    }
+
+    private func skipAgentsPreambleEnabled() -> Bool {
+        let d = UserDefaults.standard
+        let key = PreferencesKey.Unified.skipAgentsPreamble
+        if d.object(forKey: key) == nil { return true }
+        return d.bool(forKey: key)
+    }
+
+    private func sessionViewAutoScrollTarget() -> SessionViewAutoScrollTarget {
+        let d = UserDefaults.standard
+        let key = PreferencesKey.Unified.sessionViewAutoScrollTarget
+        guard let raw = d.string(forKey: key),
+              let parsed = SessionViewAutoScrollTarget(rawValue: raw) else {
+            return .lastUserPrompt
+        }
+        return parsed
+    }
+
+    private func applyAutoScrollIfNeeded(sessionID: String, skipAgentsPreamble: Bool) {
+        guard autoScrollSessionID != sessionID else { return }
+
+        let target = sessionViewAutoScrollTarget()
+        guard let lineID = userPromptLineID(for: target, skipAgentsPreamble: skipAgentsPreamble) else { return }
+        autoScrollSessionID = sessionID
+        jumpToUserPrompt(lineID: lineID)
+    }
+
+    private func userPromptLineID(for target: SessionViewAutoScrollTarget, skipAgentsPreamble: Bool) -> Int? {
+        guard !userLineIndices.isEmpty else { return nil }
+        switch target {
+        case .lastUserPrompt:
+            return userLineIndices.last
+        case .firstUserPrompt:
+            if skipAgentsPreamble, let startLineID = conversationStartLineID {
+                if let line = userLineIndices.first(where: { $0 >= startLineID }) {
+                    return line
+                }
+            }
+            return userLineIndices.first
+        }
+    }
+
+    private func jumpToFirstPrompt() {
+        guard let lineID = userPromptLineID(for: .firstUserPrompt, skipAgentsPreamble: skipAgentsPreambleEnabled()) else { return }
+        jumpToUserPrompt(lineID: lineID)
+    }
+
+    private func jumpToUserPrompt(lineID: Int) {
+        if !activeRoles.contains(.user) {
+            activeRoles.insert(.user)
+            persistRoleToggles()
+        }
+        updateUserNavigationPosition(lineID: lineID)
+        roleNavScrollTargetLineID = lineID
+        roleNavScrollToken &+= 1
+    }
+
+    private func jumpToUserPromptIndex(_ index: Int) -> Bool {
+        guard index >= 0, index < userLineIndices.count else { return false }
+        let lineID = userLineIndices[index]
+        jumpToUserPrompt(lineID: lineID)
+        imageHighlightLineID = lineID
+        imageHighlightToken &+= 1
+        return true
+    }
+
+    private func jumpToEventID(_ eventID: String) -> Bool {
+        guard let lineID = eventIDToUserLineID[eventID] else { return false }
+        jumpToUserPrompt(lineID: lineID)
+        imageHighlightLineID = lineID
+        imageHighlightToken &+= 1
+        return true
+    }
+
+    private func updateUserNavigationPosition(lineID: Int) {
+        if let position = userLineIndices.firstIndex(of: lineID) {
+            roleNavPositions[.user] = position
+        }
+    }
+
+    nonisolated private static func conversationStartLineIDIfNeeded(session: Session, lines: [TerminalLine], enabled: Bool) -> Int? {
+        guard enabled else { return nil }
+
+        // Droid: system reminders can be embedded in the first user message but should be hidden by default.
+        // When present, jump to the first real user prompt while keeping preamble content above.
+        if session.source == .droid {
+            func firstNonEmptyLine(_ text: String) -> String? {
+                for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+                    let t = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !t.isEmpty { return t }
+                }
+                return nil
+            }
+
+            var sawPreamble = false
+            var promptLine: String? = nil
+            for ev in session.events where ev.kind == .user {
+                guard let raw = ev.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { continue }
+                if Session.isAgentsPreambleText(raw) {
+                    sawPreamble = true
+                    continue
+                }
+                guard sawPreamble else { break }
+                promptLine = firstNonEmptyLine(raw)
+                break
+            }
+            if let promptLine,
+               let targetIndex = lines.firstIndex(where: { $0.role == .user && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == promptLine }) {
+                return lineID(at: targetIndex, in: lines)
+            }
+        }
+
+        let marker = "</INSTRUCTIONS>"
+        guard let closeIndex = lines.firstIndex(where: { $0.text.contains(marker) }) else {
+            guard let targetIndex = claudeConversationStartLineIndexIfNeeded(lines: lines) else { return nil }
+            return lineID(at: targetIndex, in: lines)
+        }
+
+        // Find first non-empty user line after the closing marker.
+        var targetIndex: Int? = nil
+        var index = closeIndex + 1
+        while index < lines.count {
+            let line = lines[index]
+            if line.role == .user {
+                let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty, !trimmed.contains(marker) {
+                    targetIndex = index
+                    break
+                }
+            }
+            index += 1
+        }
+        guard let targetIndex else { return nil }
+        return lineID(at: targetIndex, in: lines)
+    }
+
+    nonisolated private static func lineID(at index: Int, in lines: [TerminalLine]) -> Int? {
+        guard index >= 0, index < lines.count else { return nil }
+        return lines[index].id
+    }
+
+    nonisolated private static func claudeConversationStartLineIndexIfNeeded(lines: [TerminalLine]) -> Int? {
+        // Claude Code sometimes prefixes sessions with a "Caveat + local command transcript" block.
+        // When present, jump to the first real prompt line (not the caveat or XML-like tags).
+        let anchor = "caveat: the messages below were generated by the user while running local commands"
+        let hasCaveat = lines.prefix(120).contains(where: { $0.role == .user && $0.text.lowercased().contains(anchor) })
+        guard hasCaveat else { return nil }
+
+        for (idx, line) in lines.enumerated() where line.role == .user {
+            let t = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { continue }
+            let lower = t.lowercased()
+            if lower.hasPrefix("caveat:") { continue }
+            if lower.contains("<command-name>") || lower.contains("<command-message>") || lower.contains("<command-args>") { continue }
+            if lower.contains("<local-command-stdout") { continue }
+            if t.hasPrefix("<") { continue }
+            return idx
+        }
+        return nil
+    }
+}
+
+// MARK: - Line view
+
+private struct TerminalLineView: View {
+    let line: TerminalLine
+    let isMatch: Bool
+    let isCurrentMatch: Bool
+    let fontSize: Double
+    let monochrome: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+		    var body: some View {
+		        HStack(alignment: .firstTextBaseline, spacing: 4) {
+		            prefixView
+	                    Group {
+	                        Text(line.text)
+	                    }
+	                    .font(.system(size: fontSize,
+	                                  weight: lineFontWeight,
+	                                  design: (line.role == .toolInput || line.role == .toolOutput) ? .monospaced : .default))
+	                    .foregroundColor(swatch.foreground)
+			        }
+		        .textSelection(.enabled)
+		        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(background)
+        .cornerRadius(4)
+    }
+
+    @ViewBuilder
+    private var prefixView: some View {
+        switch line.role {
+        case .user:
+            Text(">")
+                .foregroundColor(swatch.accent)
+                .allowsHitTesting(false)
+        case .toolInput:
+            Image(systemName: "terminal")
+                .font(.system(size: 9))
+                .foregroundColor(swatch.accent)
+                .allowsHitTesting(false)
+        case .error:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9))
+                .foregroundColor(swatch.accent)
+                .allowsHitTesting(false)
+        default:
+            EmptyView()
+        }
+    }
+
+    private var background: Color {
+        if isCurrentMatch {
+            return Color.yellow.opacity(0.5)
+        } else if isMatch {
+            return (swatch.background ?? swatch.accent.opacity(0.22)).opacity(0.95)
+        } else {
+            return swatch.background ?? Color.clear
+        }
+    }
+
+	    private var swatch: TerminalRolePalette.SwiftUISwatch {
+	        TerminalRolePalette.swiftUI(role: line.role.paletteRole, scheme: colorScheme, monochrome: monochrome)
+	    }
+	
+	    private var lineFontWeight: Font.Weight {
+	        if line.role == .toolInput && isToolLabelLine(line.text) { return .semibold }
+	        return .regular
+	    }
+
+	    private func isToolLabelLine(_ text: String) -> Bool {
+	        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+	        guard !trimmed.isEmpty else { return false }
+	        let lower = trimmed.lowercased()
+        let labels: Set<String> = ["bash", "read", "list", "glob", "grep", "plan", "task", "tool"]
+        if labels.contains(lower) { return true }
+        if lower.hasPrefix("task ("), lower.hasSuffix(")") { return true }
+        return false
+    }
+}
+
+// MARK: - Button Styles
+
+// MARK: - NSTextView-backed selectable terminal renderer
+
+private struct TerminalRolePalette {
+    enum Role {
+        case user
+        case assistant
+        case toolInput
+        case toolOutput
+        case error
+        case meta
+    }
+
+    struct SwiftUISwatch {
+        let foreground: Color
+        let background: Color?
+        let accent: Color
+    }
+
+    struct AppKitSwatch {
+        let foreground: NSColor
+        let background: NSColor?
+        let accent: NSColor
+    }
+
+    static func role(for toggle: SessionTerminalView.RoleToggle) -> Role {
+        switch toggle {
+        case .user: return .user
+        case .assistant: return .assistant
+        // Tools toggle includes both input/output; use tool input as the representative swatch.
+        case .tools: return .toolInput
+        case .errors: return .error
+        }
+    }
+
+    static func swiftUI(role: Role, sessionSource: SessionSource? = nil, scheme: ColorScheme, monochrome: Bool = false) -> SwiftUISwatch {
+        let appKitColors = baseColors(for: role, sessionSource: sessionSource, scheme: scheme, monochrome: monochrome)
+        return SwiftUISwatch(
+            foreground: Color(nsColor: appKitColors.foreground),
+            background: appKitColors.background.map { Color(nsColor: $0) },
+            accent: Color(nsColor: appKitColors.accent)
+        )
+    }
+
+    static func appKit(role: Role, sessionSource: SessionSource? = nil, scheme: ColorScheme, monochrome: Bool = false) -> AppKitSwatch {
+        baseColors(for: role, sessionSource: sessionSource, scheme: scheme, monochrome: monochrome)
+    }
+
+    private static func baseColors(for role: Role, sessionSource: SessionSource?, scheme: ColorScheme, monochrome: Bool) -> AppKitSwatch {
+        let isDark = (scheme == .dark)
+
+        func tinted(_ color: NSColor, light: CGFloat, dark: CGFloat) -> NSColor {
+            color.withAlphaComponent(isDark ? dark : light)
+        }
+
+        if monochrome {
+            // Monochrome mode: use gray shades
+            switch role {
+            case .user:
+                return AppKitSwatch(
+                    foreground: isDark ? NSColor.black : NSColor.white,
+                    background: isDark
+                        ? NSColor(white: 0.94, alpha: 0.96)
+                        : NSColor(white: 0.20, alpha: 0.90),
+                    accent: isDark
+                        ? NSColor(white: 0.30, alpha: 1.0)
+                        : NSColor(white: 0.75, alpha: 1.0)
+                )
+            case .assistant:
+                return AppKitSwatch(
+                    foreground: NSColor.labelColor,
+                    background: NSColor(white: 0.4, alpha: isDark ? 0.18 : 0.10),
+                    accent: NSColor(white: 0.4, alpha: 1.0)
+                )
+            case .toolInput:
+                return AppKitSwatch(
+                    foreground: NSColor.labelColor,
+                    background: NSColor(white: 0.6, alpha: isDark ? 0.22 : 0.14),
+                    accent: NSColor(white: 0.6, alpha: 1.0)
+                )
+            case .toolOutput:
+                return AppKitSwatch(
+                    foreground: NSColor.labelColor,
+                    background: NSColor(white: 0.6, alpha: isDark ? 0.22 : 0.14),
+                    accent: NSColor(white: 0.6, alpha: 1.0)
+                )
+            case .error:
+                return AppKitSwatch(
+                    foreground: NSColor.labelColor,
+                    background: NSColor(white: 0.3, alpha: isDark ? 0.30 : 0.20),
+                    accent: NSColor(white: 0.3, alpha: 1.0)
+                )
+            case .meta:
+                return AppKitSwatch(
+                    foreground: NSColor.secondaryLabelColor,
+                    background: nil,
+                    accent: NSColor.secondaryLabelColor
+                )
+            }
+        } else {
+            // Color mode: high-contrast palette tuned for scanning in both dark/light modes.
+            switch role {
+            case .user:
+                return AppKitSwatch(
+                    foreground: isDark ? NSColor.black : NSColor.white,
+                    background: isDark
+                        ? NSColor(white: 0.94, alpha: 0.96)
+                        : NSColor(white: 0.20, alpha: 0.90),
+                    accent: NSColor.systemBlue
+                )
+            case .assistant:
+                let accentBase = sessionSource.map { TranscriptColorSystem.agentBrandAccent(source: $0) } ?? NSColor.secondaryLabelColor
+                return AppKitSwatch(
+                    foreground: NSColor.labelColor,
+                    background: tinted(accentBase, light: 0.08, dark: 0.12),
+                    accent: accentBase
+                )
+            case .toolInput:
+                return AppKitSwatch(
+                    foreground: NSColor.labelColor,
+                    background: tinted(NSColor.systemPurple, light: 0.16, dark: 0.18),
+                    accent: NSColor.systemPurple
+	                )
+	            case .toolOutput:
+	                return AppKitSwatch(
+	                    foreground: NSColor.labelColor,
+	                    background: tinted(NSColor.systemGreen, light: 0.10, dark: 0.14),
+	                    accent: NSColor.systemGreen
+	                )
+	            case .error:
+	                return AppKitSwatch(
+	                    foreground: NSColor.labelColor,
+	                    background: tinted(NSColor.systemRed, light: 0.28, dark: 0.40),
+	                    accent: NSColor.systemRed
+	                )
+	            case .meta:
+	                return AppKitSwatch(
+	                    foreground: NSColor.secondaryLabelColor,
+	                    background: nil,
+	                    accent: NSColor.secondaryLabelColor
+	                )
+	            }
+	        }
+	    }
+	}
+
+private extension TerminalLineRole {
+    var paletteRole: TerminalRolePalette.Role {
+        switch self {
+        case .user: return .user
+        case .assistant: return .assistant
+        case .toolInput: return .toolInput
+        case .toolOutput: return .toolOutput
+        case .error: return .error
+        case .meta: return .meta
+        }
+    }
+
+    var signatureToken: Int {
+        switch self {
+        case .user: return 1
+        case .assistant: return 2
+        case .toolInput: return 3
+        case .toolOutput: return 4
+        case .error: return 5
+        case .meta: return 6
+        }
+    }
+}
+
+// MARK: - Terminal layout + decorations (Color view)
+
+    private final class TerminalLayoutManager: NSLayoutManager {
+        enum BlockKind {
+            case user
+            case userPreamble
+            case userInterrupt
+            case systemNotice
+            case agent
+            case plan
+            case code
+            case diff
+            case reviewSummary
+            case toolCall
+            case toolOutput
+            case error
+            case localCommand
+            case imageAnchor
+    }
+
+    struct BlockDecoration {
+        let range: NSRange
+        let kind: BlockKind
+    }
+
+    struct FindMatch {
+        let range: NSRange
+        let isCurrentLine: Bool
+    }
+
+    struct LineIndexEntry {
+        let id: Int
+        let range: NSRange
+    }
+
+    var isDark: Bool = false
+    var agentBrandAccent: NSColor = NSColor.secondaryLabelColor
+    var blocks: [BlockDecoration] = []
+	    var lineIndex: [LineIndexEntry] = []
+	    var matchLineIDs: Set<Int> = []
+	    var currentMatchLineID: Int? = nil
+	    var matches: [FindMatch] = []
+	    var localFindRanges: [NSRange] = []
+	    var localFindCurrentLineID: Int? = nil
+
+    private struct BlockStyle {
+        let fill: NSColor
+        let accent: NSColor?
+        let accentWidth: CGFloat
+        let paddingY: CGFloat
+    }
+
+		    private func style(for kind: BlockKind) -> BlockStyle {
+		        // Tuned for consistent contrast in light/dark:
+		        // - subtle tint fill
+		        // - optional left accent bar
+		        // - thin stroke for definition
+	        let dark = isDark
+
+        func rgba(_ color: NSColor, alpha: CGFloat) -> NSColor { color.withAlphaComponent(alpha) }
+
+        switch kind {
+        case .user:
+            let fill = dark
+                ? NSColor(white: 0.94, alpha: 0.96)
+                : NSColor(white: 0.20, alpha: 0.90)
+            return BlockStyle(
+                fill: fill,
+                accent: nil,
+                accentWidth: 0,
+                paddingY: 6
+            )
+        case .userPreamble:
+            let base: NSColor = TranscriptColorSystem.semanticAccent(.user)
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.12 : 0.04),
+                accent: rgba(base, alpha: dark ? 0.70 : 0.50),
+                accentWidth: 4,
+                paddingY: 6
+            )
+	        case .userInterrupt:
+	            let base: NSColor = TranscriptColorSystem.semanticAccent(.user)
+	            return BlockStyle(
+	                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+	                accent: rgba(base, alpha: dark ? 0.70 : 0.50),
+	                accentWidth: 4,
+	                paddingY: 6
+	            )
+	        case .systemNotice:
+	            let base = NSColor.systemOrange
+	            return BlockStyle(
+	                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+	                accent: rgba(base, alpha: dark ? 0.82 : 0.65),
+	                accentWidth: 4,
+	                paddingY: 8
+	            )
+        case .agent:
+            let base = agentBrandAccent
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.06 : 0.012),
+                accent: rgba(base, alpha: dark ? 0.60 : 0.42),
+                accentWidth: 4,
+                paddingY: 6
+            )
+        case .plan:
+            let base: NSColor = TranscriptColorSystem.semanticAccent(.plan)
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.11 : 0.035),
+                accent: rgba(base, alpha: dark ? 0.80 : 0.62),
+                accentWidth: 4,
+                paddingY: 8
+            )
+        case .code:
+            let base: NSColor = TranscriptColorSystem.semanticAccent(.code)
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+                accent: rgba(base, alpha: dark ? 0.80 : 0.62),
+                accentWidth: 4,
+                paddingY: 8
+            )
+        case .diff:
+            let base: NSColor = TranscriptColorSystem.semanticAccent(.diff)
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+                accent: rgba(base, alpha: dark ? 0.80 : 0.62),
+                accentWidth: 4,
+                paddingY: 8
+            )
+        case .reviewSummary:
+            let base: NSColor = TranscriptColorSystem.semanticAccent(.reviewSummary)
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+                accent: rgba(base, alpha: dark ? 0.80 : 0.62),
+                accentWidth: 4,
+                paddingY: 8
+            )
+        case .localCommand:
+            let base: NSColor = TranscriptColorSystem.semanticAccent(.user)
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+                accent: rgba(base, alpha: dark ? 0.70 : 0.50),
+                accentWidth: 4,
+                paddingY: 6
+            )
+	        case .toolCall:
+	            let base: NSColor = TranscriptColorSystem.semanticAccent(.toolCall)
+	            return BlockStyle(
+	                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+	                accent: rgba(base, alpha: dark ? 0.78 : 0.60),
+	                accentWidth: 4,
+                    paddingY: 8
+	            )
+	        case .toolOutput:
+	            let base: NSColor = TranscriptColorSystem.semanticAccent(.toolOutputSuccess)
+	            return BlockStyle(
+	                fill: rgba(base, alpha: dark ? 0.10 : 0.03),
+	                accent: rgba(base, alpha: dark ? 0.78 : 0.60),
+	                accentWidth: 4,
+                    paddingY: 8
+	            )
+        case .error:
+            let base: NSColor = TranscriptColorSystem.semanticAccent(.error)
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.11 : 0.035),
+                accent: rgba(base, alpha: dark ? 0.82 : 0.65),
+                accentWidth: 4,
+                paddingY: 8
+            )
+        case .imageAnchor:
+            let base: NSColor = NSColor.systemPurple
+            return BlockStyle(
+                fill: rgba(base, alpha: dark ? 0.12 : 0.05),
+                accent: rgba(base, alpha: dark ? 0.78 : 0.60),
+                accentWidth: 5,
+                paddingY: 6
+            )
+        }
+    }
+
+    private func blockDecoration(containing charIndex: Int) -> BlockDecoration? {
+        // Binary search by character location (blocks are non-overlapping and sorted by construction).
+        var low = 0
+        var high = blocks.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            let r = blocks[mid].range
+            if charIndex < r.location {
+                high = mid - 1
+                continue
+            }
+            if charIndex >= (r.location + r.length) {
+                low = mid + 1
+                continue
+            }
+            return blocks[mid]
+        }
+        return nil
+    }
+
+    private func lineID(at charIndex: Int) -> Int? {
+        var low = 0
+        var high = lineIndex.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            let r = lineIndex[mid].range
+            if charIndex < r.location {
+                high = mid - 1
+                continue
+            }
+            if charIndex >= (r.location + r.length) {
+                low = mid + 1
+                continue
+            }
+            return lineIndex[mid].id
+        }
+        return nil
+    }
+
+	    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+	        // Draw block cards + find highlights, then let AppKit draw any remaining backgrounds (including selection).
+
+	        if let tc = textContainers.first {
+	            drawBlockCards(forGlyphRange: glyphsToShow, in: tc, at: origin)
+	            drawFindHighlights(forGlyphRange: glyphsToShow, in: tc, at: origin)
+	            drawFindLineMarkers(forGlyphRange: glyphsToShow, in: tc, at: origin)
+	            drawLocalFindLineMarker(forGlyphRange: glyphsToShow, in: tc, at: origin)
+	            drawLocalFindOutlines(forGlyphRange: glyphsToShow, in: tc, at: origin)
+	        }
+
+	        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+	    }
+
+	    private func drawLocalFindOutlines(forGlyphRange glyphsToShow: NSRange, in tc: NSTextContainer, at origin: CGPoint) {
+	        guard !localFindRanges.isEmpty else { return }
+
+	        let stroke = NSColor.systemBlue.withAlphaComponent(isDark ? 0.92 : 0.85)
+	        let glow = NSColor.systemBlue.withAlphaComponent(isDark ? 0.55 : 0.30)
+
+	        for r0 in localFindRanges {
+	            let matchGlyphs = glyphRange(forCharacterRange: r0, actualCharacterRange: nil)
+	            guard NSIntersectionRange(matchGlyphs, glyphsToShow).length > 0 else { continue }
+
+	            enumerateLineFragments(forGlyphRange: matchGlyphs) { _, _, container, glyphRange, _ in
+	                guard container === tc else { return }
+	                let g = NSIntersectionRange(glyphRange, matchGlyphs)
+	                guard g.length > 0 else { return }
+
+	                var rect = self.boundingRect(forGlyphRange: g, in: tc)
+	                rect = rect.offsetBy(dx: origin.x, dy: origin.y)
+	                rect = rect.insetBy(dx: -2.0, dy: -1.0)
+
+	                let radius: CGFloat = 4
+	                let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+
+	                NSGraphicsContext.saveGraphicsState()
+	                let shadow = NSShadow()
+	                shadow.shadowBlurRadius = 8
+	                shadow.shadowOffset = .zero
+	                shadow.shadowColor = glow
+	                shadow.set()
+	                stroke.setStroke()
+	                path.lineWidth = 1.6
+	                path.stroke()
+	                NSGraphicsContext.restoreGraphicsState()
+	            }
+	        }
+	    }
+
+		    private func drawLocalFindLineMarker(forGlyphRange glyphsToShow: NSRange, in tc: NSTextContainer, at origin: CGPoint) {
+		        guard let currentID = localFindCurrentLineID else { return }
+		        guard let entry = lineIndex.first(where: { $0.id == currentID }) else { return }
+
+		        let lineGlyphs = glyphRange(forCharacterRange: entry.range, actualCharacterRange: nil)
+		        guard NSIntersectionRange(lineGlyphs, glyphsToShow).length > 0 else { return }
+
+		        let fill = NSColor.systemBlue.withAlphaComponent(isDark ? 0.95 : 0.88)
+		        let cardInsetX: CGFloat = 8
+		        var renderedGlyphStarts: Set<Int> = []
+
+		        guard let firstMatch = localFindRanges.first else { return }
+		        let matchGlyphs = glyphRange(forCharacterRange: firstMatch, actualCharacterRange: nil)
+		        guard NSIntersectionRange(matchGlyphs, glyphsToShow).length > 0 else { return }
+
+		        enumerateLineFragments(forGlyphRange: matchGlyphs) { rect, _, container, glyphRange, _ in
+		            guard container === tc else { return }
+		            if renderedGlyphStarts.contains(glyphRange.location) { return }
+		            renderedGlyphStarts.insert(glyphRange.location)
+
+		            let g = NSIntersectionRange(glyphRange, matchGlyphs)
+		            guard g.length > 0 else { return }
+
+		            var matchRect = self.boundingRect(forGlyphRange: g, in: tc)
+		            matchRect = matchRect.offsetBy(dx: origin.x, dy: origin.y)
+
+		            let charIndex = self.characterIndexForGlyph(at: g.location)
+		            let blockAccentWidth: CGFloat = {
+		                guard let b = self.blockDecoration(containing: charIndex) else { return 0 }
+		                return self.style(for: b.kind).accentWidth
+		            }()
+
+		            let width: CGFloat = max(6, blockAccentWidth + 2)
+		            let height = max(2, matchRect.height - 2)
+		            let y = matchRect.minY + 1
+		            let x = rect.minX + origin.x + cardInsetX
+
+		            let barRect = CGRect(x: x, y: y, width: width, height: height)
+		            let bar = NSBezierPath(rect: barRect)
+
+		            fill.setFill()
+		            bar.fill()
+		        }
+		    }
+
+    private func drawBlockCards(forGlyphRange glyphsToShow: NSRange, in tc: NSTextContainer, at origin: CGPoint) {
+        guard !blocks.isEmpty else { return }
+
+        let cardCornerRadius: CGFloat = 8
+        let cardInsetX: CGFloat = 8
+
+        for block in blocks {
+            let blockGlyphs = glyphRange(forCharacterRange: block.range, actualCharacterRange: nil)
+            guard NSIntersectionRange(blockGlyphs, glyphsToShow).length > 0 else { continue }
+
+            var unionRect: CGRect? = nil
+            enumerateLineFragments(forGlyphRange: blockGlyphs) { rect, usedRect, _, _, _ in
+                let r = rect.offsetBy(dx: origin.x, dy: origin.y)
+                let u = usedRect.offsetBy(dx: origin.x, dy: origin.y)
+                let mixed = CGRect(
+                    x: r.minX,
+                    y: u.minY,
+                    width: max(0, r.maxX - r.minX),
+                    height: max(0, u.maxY - u.minY)
+                )
+                unionRect = unionRect.map { $0.union(mixed) } ?? mixed
+            }
+            guard var cardRect = unionRect else { continue }
+
+            let style = style(for: block.kind)
+
+            // Card geometry: keep whitespace between blocks, but add internal padding.
+            cardRect = cardRect.insetBy(dx: cardInsetX, dy: 0)
+            cardRect = cardRect.insetBy(dx: 0, dy: -style.paddingY)
+            let path = NSBezierPath(roundedRect: cardRect, xRadius: cardCornerRadius, yRadius: cardCornerRadius)
+
+            style.fill.setFill()
+            path.fill()
+
+            if let accent = style.accent, style.accentWidth > 0 {
+                let stripInsetY = style.paddingY
+                accent.setFill()
+                let y0 = cardRect.minY + stripInsetY
+                let h = max(0, cardRect.height - (stripInsetY * 2))
+                if h > 0 {
+                    let stripRect = CGRect(x: cardRect.minX, y: y0, width: style.accentWidth, height: h)
+                    let radius = style.accentWidth / 2
+                    if block.kind == .agent {
+                        // Agent strip: two-tone inset style so it won't be confused with semantic success strips.
+                        let outer = NSBezierPath(roundedRect: stripRect, xRadius: radius, yRadius: radius)
+                        accent.withAlphaComponent(min(1, accent.alphaComponent)).setFill()
+                        outer.fill()
+
+                        let innerRect = stripRect.insetBy(dx: 1.0, dy: 1.0)
+                        if innerRect.width > 0, innerRect.height > 0 {
+                            let innerRadius = max(0, (innerRect.width / 2))
+                            let inner = NSBezierPath(roundedRect: innerRect, xRadius: innerRadius, yRadius: innerRadius)
+                            accent.withAlphaComponent(min(1, accent.alphaComponent + 0.30)).setFill()
+                            inner.fill()
+                        }
+                    } else {
+                        NSBezierPath(roundedRect: stripRect, xRadius: radius, yRadius: radius).fill()
+                    }
+                    if block.kind == .user {
+                        let rightStripRect = CGRect(x: cardRect.maxX - style.accentWidth, y: y0, width: style.accentWidth, height: h)
+                        let rightRadius = style.accentWidth / 2
+                        accent.setFill()
+                        NSBezierPath(roundedRect: rightStripRect, xRadius: rightRadius, yRadius: rightRadius).fill()
+                    }
+                }
+            }
+        }
+    }
+
+    private func drawFindHighlights(forGlyphRange glyphsToShow: NSRange, in tc: NSTextContainer, at origin: CGPoint) {
+        guard !matches.isEmpty else { return }
+
+        let yellow = NSColor.systemYellow
+        let fill = yellow.withAlphaComponent(isDark ? 0.32 : 0.22)
+        let stroke = yellow.withAlphaComponent(isDark ? 0.70 : 0.55)
+        let currentStroke = yellow.withAlphaComponent(isDark ? 0.90 : 0.85)
+
+        for m in matches {
+            let matchGlyphs = glyphRange(forCharacterRange: m.range, actualCharacterRange: nil)
+            guard NSIntersectionRange(matchGlyphs, glyphsToShow).length > 0 else { continue }
+
+            enumerateLineFragments(forGlyphRange: matchGlyphs) { _, _, container, glyphRange, _ in
+                guard container === tc else { return }
+                let g = NSIntersectionRange(glyphRange, matchGlyphs)
+                guard g.length > 0 else { return }
+                var r = self.boundingRect(forGlyphRange: g, in: tc)
+                r = r.offsetBy(dx: origin.x, dy: origin.y)
+                r = r.insetBy(dx: -1.5, dy: -0.5)
+
+                let radius: CGFloat = 3
+                let p = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
+                fill.setFill()
+                p.fill()
+
+                if m.isCurrentLine {
+                    currentStroke.setStroke()
+                    p.lineWidth = 1
+                    p.stroke()
+
+                    // Stronger “underline” hint (bottom rule) for current match.
+                    let y = r.maxY - 2.0
+                    let underline = NSBezierPath()
+                    underline.move(to: CGPoint(x: r.minX + 1, y: y))
+                    underline.line(to: CGPoint(x: r.maxX - 1, y: y))
+                    underline.lineWidth = 2
+                    currentStroke.setStroke()
+                    underline.stroke()
+                } else {
+                    stroke.setStroke()
+                    p.lineWidth = 1
+                    p.stroke()
+                }
+            }
+        }
+    }
+
+    private func drawFindLineMarkers(forGlyphRange glyphsToShow: NSRange, in tc: NSTextContainer, at origin: CGPoint) {
+        guard !matches.isEmpty else { return }
+
+        let yellow = NSColor.systemYellow
+        let anyFill = yellow.withAlphaComponent(isDark ? 0.65 : 0.50)
+        let currentFill = yellow.withAlphaComponent(isDark ? 0.85 : 0.75)
+        let cardInsetX: CGFloat = 8
+        var renderedGlyphStarts: Set<Int> = []
+
+        for match in matches {
+            let matchGlyphs = glyphRange(forCharacterRange: match.range, actualCharacterRange: nil)
+            guard NSIntersectionRange(matchGlyphs, glyphsToShow).length > 0 else { continue }
+
+            enumerateLineFragments(forGlyphRange: matchGlyphs) { rect, _, container, glyphRange, _ in
+                guard container === tc else { return }
+                let g = NSIntersectionRange(glyphRange, matchGlyphs)
+                guard g.length > 0 else { return }
+                if renderedGlyphStarts.contains(glyphRange.location) { return }
+                renderedGlyphStarts.insert(glyphRange.location)
+
+                let charIndex = self.characterIndexForGlyph(at: g.location)
+                guard let lineID = self.lineID(at: charIndex) else { return }
+
+                let isCurrentLine = (lineID == self.currentMatchLineID)
+                let blockAccentWidth: CGFloat = {
+                    guard let b = self.blockDecoration(containing: charIndex) else { return 0 }
+                    return self.style(for: b.kind).accentWidth
+                }()
+
+                let width: CGFloat = max(isCurrentLine ? 4 : 3, blockAccentWidth)
+                let height = max(2, rect.height - 4)
+                let y = rect.minY + 2 + origin.y
+                let x = rect.minX + origin.x + cardInsetX
+
+                let pill = NSBezierPath(roundedRect: CGRect(x: x, y: y, width: width, height: height),
+                                        xRadius: width / 2,
+                                        yRadius: width / 2)
+                (isCurrentLine ? currentFill : anyFill).setFill()
+                pill.fill()
+            }
+        }
+    }
+}
+
+private struct TerminalTextScrollView: NSViewRepresentable {
+    let proximityContextID: String
+    let lines: [TerminalLine]
+    let lineSignature: Int
+    let fontSize: CGFloat
+    let sessionSource: SessionSource
+    let inlineImagesEnabled: Bool
+    let inlineImagesByUserBlockIndex: [Int: [InlineSessionImage]]
+    let inlineImagesSignature: Int
+    let unifiedFindQuery: String
+    let unifiedFindToken: Int
+    let unifiedMatchOccurrences: [MatchOccurrence]
+    let unifiedCurrentMatchLineID: Int?
+    let unifiedHighlightActive: Bool
+    let unifiedAllowMatchAutoScroll: Bool
+    let findQuery: String
+    let findToken: Int
+    let findCurrentMatchLineID: Int?
+    let findHighlightActive: Bool
+    let allowMatchAutoScroll: Bool
+    let scrollToBottomToken: Int
+    let scrollTargetLineID: Int?
+    let scrollTargetToken: Int
+    let roleNavScrollTargetLineID: Int?
+    let roleNavScrollToken: Int
+    let preambleUserBlockIndexes: Set<Int>
+    let imageHighlightLineID: Int?
+    let imageHighlightToken: Int
+    let onBottomProximityChange: (Bool) -> Void
+    let focusRequestToken: Int
+    let colorScheme: ColorScheme
+    let monochrome: Bool
+    let showCodeDiffLineNumbers: Bool
+    let linkificationEnabled: Bool
+    let sessionCwd: String?
+    let repoRootPath: String?
+    let ideTarget: IDEOpener.Target
+    let ideBinaryOverridePath: String
+
+    private final class InlineImageAttachment: NSTextAttachment {
+        let imageID: String
+        let fixedSize: NSSize
+
+        init(imageID: String, fixedSize: NSSize) {
+            self.imageID = imageID
+            self.fixedSize = fixedSize
+            super.init(data: nil, ofType: nil)
+            self.attachmentCell = InlineImageAttachmentCell(thumbnail: nil, fixedSize: fixedSize)
+        }
+
+        required init?(coder: NSCoder) {
+            self.imageID = ""
+            self.fixedSize = .zero
+            super.init(coder: coder)
+            self.attachmentCell = InlineImageAttachmentCell(thumbnail: nil, fixedSize: .zero)
+        }
+
+        func setThumbnail(_ image: NSImage?) {
+            if let cell = attachmentCell as? InlineImageAttachmentCell {
+                cell.thumbnail = image
+                if image != nil {
+                    cell.isFailed = false
+                }
+            }
+        }
+
+        func setFailed(_ failed: Bool) {
+            (attachmentCell as? InlineImageAttachmentCell)?.isFailed = failed
+        }
+    }
+
+    private final class InlineImageAttachmentCell: NSTextAttachmentCell {
+        var thumbnail: NSImage?
+        var isFailed: Bool = false
+        let fixedSize: NSSize
+
+        init(thumbnail: NSImage?, fixedSize: NSSize) {
+            self.thumbnail = thumbnail
+            self.fixedSize = fixedSize
+            super.init(imageCell: thumbnail)
+        }
+
+        required init(coder: NSCoder) {
+            self.thumbnail = nil
+            self.fixedSize = .zero
+            super.init(coder: coder)
+        }
+
+        override func cellSize() -> NSSize {
+            fixedSize
+        }
+
+        override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
+            let radius: CGFloat = 10
+            let bg = NSColor.gray.withAlphaComponent(0.08)
+            let stroke = NSColor.gray.withAlphaComponent(0.18)
+
+            let path = NSBezierPath(roundedRect: cellFrame.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+            bg.setFill()
+            path.fill()
+            stroke.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+
+            if let image = thumbnail {
+                let inset: CGFloat = 10
+                let target = cellFrame.insetBy(dx: inset, dy: inset)
+                let imgSize = image.size
+                if imgSize.width > 0, imgSize.height > 0 {
+                    let scale = min(target.width / imgSize.width, target.height / imgSize.height)
+                    let w = imgSize.width * scale
+                    let h = imgSize.height * scale
+                    let rect = NSRect(x: target.midX - w / 2, y: target.midY - h / 2, width: w, height: h)
+                    image.draw(in: rect)
+                }
+                return
+            }
+
+            let symbolName = isFailed ? "photo.badge.exclamationmark" : "photo"
+            let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+            symbol?.isTemplate = true
+            if let symbol {
+                let tint = NSColor.secondaryLabelColor
+                let symbolSize: CGFloat = min(28, min(cellFrame.width, cellFrame.height) * 0.35)
+                let rect = NSRect(x: cellFrame.midX - symbolSize / 2, y: cellFrame.midY - symbolSize / 2, width: symbolSize, height: symbolSize)
+                tint.set()
+                symbol.draw(in: rect)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate, AVSpeechSynthesizerDelegate, @unchecked Sendable {
+        static let inlineImageIDKey = NSAttributedString.Key("AgentSessionsInlineImageID")
+
+        private final class InlineImageHoverPreviewViewController: NSViewController {
+            private let imageView = NSImageView()
+            private let spinner = NSProgressIndicator()
+            private let hintLabel = NSTextField(labelWithString: String(localized: "Click to open Image Browser"))
+            private let errorLabel = NSTextField(labelWithString: "")
+            private let labelsStack = NSStackView()
+
+            override func loadView() {
+                let content = NSView()
+
+                imageView.translatesAutoresizingMaskIntoConstraints = false
+                imageView.imageScaling = .scaleProportionallyUpOrDown
+                imageView.wantsLayer = true
+                imageView.layer?.cornerRadius = 8
+                imageView.layer?.masksToBounds = true
+
+                spinner.translatesAutoresizingMaskIntoConstraints = false
+                spinner.style = .spinning
+                spinner.controlSize = .small
+
+                hintLabel.translatesAutoresizingMaskIntoConstraints = false
+                hintLabel.font = NSFont.systemFont(ofSize: 11)
+                hintLabel.textColor = .secondaryLabelColor
+
+                errorLabel.translatesAutoresizingMaskIntoConstraints = false
+                errorLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+                errorLabel.textColor = .systemRed
+                errorLabel.lineBreakMode = .byWordWrapping
+                errorLabel.maximumNumberOfLines = 2
+                errorLabel.isHidden = true
+
+                labelsStack.translatesAutoresizingMaskIntoConstraints = false
+                labelsStack.orientation = .vertical
+                labelsStack.alignment = .leading
+                labelsStack.distribution = .fill
+                labelsStack.spacing = 2
+                labelsStack.addArrangedSubview(errorLabel)
+                labelsStack.addArrangedSubview(hintLabel)
+
+                content.addSubview(imageView)
+                content.addSubview(spinner)
+                content.addSubview(labelsStack)
+
+                NSLayoutConstraint.activate([
+                    imageView.topAnchor.constraint(equalTo: content.topAnchor, constant: 10),
+                    imageView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
+                    imageView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+
+                    labelsStack.topAnchor.constraint(equalTo: imageView.bottomAnchor, constant: 8),
+                    labelsStack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
+                    labelsStack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+                    labelsStack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
+
+                    spinner.centerXAnchor.constraint(equalTo: imageView.centerXAnchor),
+                    spinner.centerYAnchor.constraint(equalTo: imageView.centerYAnchor),
+
+                    imageView.widthAnchor.constraint(equalToConstant: 360),
+                    imageView.heightAnchor.constraint(equalToConstant: 260),
+                ])
+
+                view = content
+            }
+
+            func setState(image: NSImage?, error: String? = nil) {
+                imageView.image = image
+                if let error {
+                    errorLabel.stringValue = error
+                    errorLabel.isHidden = false
+                    spinner.stopAnimation(nil)
+                    return
+                }
+
+                errorLabel.stringValue = ""
+                errorLabel.isHidden = true
+                if image == nil {
+                    spinner.startAnimation(nil)
+                } else {
+                    spinner.stopAnimation(nil)
+                }
+            }
+        }
+
+        var lineRanges: [Int: NSRange] = [:]
+        var lineRoles: [Int: TerminalLineRole] = [:]
+        var lastLinesSignature: Int = 0
+        var lastFontSize: CGFloat = 0
+        var lastMonochrome: Bool = false
+        var lastColorScheme: ColorScheme = .light
+        var lastInlineImagesSignature: Int = 0
+        var lastShowCodeDiffLineNumbers: Bool = true
+        var lastLinkificationEnabled: Bool = true
+        var lastScrollToBottomToken: Int = 0
+        var lastNearBottom: Bool? = nil
+        var lastProximityContextID: String = ""
+        var lastScrollToken: Int = 0
+        var lastRoleNavScrollToken: Int = 0
+        var lastFocusRequestToken: Int = 0
+        var lastImageHighlightToken: Int = 0
+        var onBottomProximityChange: ((Bool) -> Void)? = nil
+
+        var lastUnifiedFindQuery: String = ""
+        var lastUnifiedAutoScrollToken: Int = 0
+        var lastUnifiedMatchOccurrences: [MatchOccurrence] = []
+        var lastUnifiedCurrentMatchLineID: Int? = nil
+
+        var lastFindQuery: String = ""
+        var lastFindAutoScrollToken: Int = 0
+        var lastFindCurrentMatchLineID: Int? = nil
+
+        var lines: [TerminalLine] = []
+        var orderedLineRanges: [NSRange] = []
+        var orderedLineIDs: [Int] = []
+        var ideTarget: IDEOpener.Target = .systemDefault
+        var ideBinaryOverridePath: String = ""
+
+        private weak var activeTextView: NSTextView?
+        private weak var activeScrollView: NSScrollView?
+        weak var activeLayoutManager: TerminalLayoutManager?
+        private var activeBlockText: String = ""
+        private static let speechTeardownQueue = DispatchQueue(label: "com.agentsessions.speechSynthesizer.teardown", qos: .utility)
+        private let speechQueue = DispatchQueue(label: "com.agentsessions.speechSynthesizer", qos: .userInitiated)
+        private var speechSynthesizer: AVSpeechSynthesizer? = nil
+        private var isSpeaking: Bool = false
+
+        var inlineImagesEnabled: Bool = false
+        private var inlineImagesByID: [String: InlineSessionImage] = [:]
+        private var inlineAttachmentsByID: [String: InlineImageAttachment] = [:]
+        private var inlineAttachmentRangesByID: [String: NSRange] = [:]
+        private var inlineThumbnailCache: [String: NSImage] = [:]
+        private var inlineThumbnailTasks: [String: Task<Void, Never>] = [:]
+        private var inlinePreviewFileCache: [String: URL] = [:]
+        private var inlineHoverPreviewCache: [String: NSImage] = [:]
+        private var inlineDecodeFailedIDs: Set<String> = []
+        private var inlineHoverTask: Task<Void, Never>? = nil
+        private var inlineHoverPopover: NSPopover? = nil
+        private var inlineHoverController: InlineImageHoverPreviewViewController? = nil
+        private var inlineHoverImageID: String? = nil
+        private var inlineContextImageID: String? = nil
+        private var scrollIdleWorkItem: DispatchWorkItem? = nil
+        private var scrollObserver: NSObjectProtocol? = nil
+        private weak var observedDocumentView: NSView? = nil
+        private var documentFrameObserver: NSObjectProtocol? = nil
+
+        private static let nearBottomThreshold: CGFloat = 48
+
+        override init() {
+            super.init()
+            let synthesizer = AVSpeechSynthesizer()
+            synthesizer.delegate = self
+            speechSynthesizer = synthesizer
+        }
+
+        deinit {
+            removeScrollObserver()
+            inlineThumbnailTasks.values.forEach { $0.cancel() }
+            inlineHoverTask?.cancel()
+
+            // AVSpeechSynthesizer teardown can synchronously block waiting on its internal worker thread.
+            // If coordinator deallocation happens on the UI thread, that can show up as a QoS priority
+            // inversion. Detach the synthesizer and let it stop + deallocate off the UI thread.
+            let synthesizer = speechSynthesizer
+            speechSynthesizer = nil
+            synthesizer?.delegate = nil
+            guard let synthesizer else { return }
+            speechQueue.async {
+                synthesizer.stopSpeaking(at: .immediate)
+                Self.speechTeardownQueue.async {
+                    _ = synthesizer
+                }
+            }
+        }
+
+        func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRange oldSelectedCharRange: NSRange, toCharacterRange newSelectedCharRange: NSRange) -> NSRange {
+            guard let event = NSApp.currentEvent else { return newSelectedCharRange }
+            let isContextClick =
+                event.type == .rightMouseDown ||
+                event.type == .rightMouseUp ||
+                event.type == .otherMouseDown ||
+                event.type == .otherMouseUp ||
+                (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) ||
+                (event.type == .leftMouseUp && event.modifierFlags.contains(.control))
+            if isContextClick {
+                return oldSelectedCharRange
+            }
+            return newSelectedCharRange
+        }
+
+        func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            self.activeTextView = textView
+            self.activeBlockText = blockText(at: charIndex) ?? ""
+            closeInlineHoverPopover()
+
+            if inlineImagesEnabled,
+               let ts = textView.textStorage,
+               charIndex >= 0,
+               charIndex < ts.length,
+               let id = ts.attribute(Self.inlineImageIDKey, at: charIndex, effectiveRange: nil) as? String {
+                inlineContextImageID = id
+                return inlineImageContextMenu()
+            }
+            inlineContextImageID = nil
+
+            let out = NSMenu(title: String(localized: "Transcript"))
+            out.autoenablesItems = false
+
+            let hasSelection = textView.selectedRange().length > 0
+            let copySelection = NSMenuItem(title: String(localized: "Copy"), action: hasSelection ? #selector(copySelectionOnly(_:)) : nil, keyEquivalent: "")
+            copySelection.target = hasSelection ? self : nil
+            copySelection.isEnabled = hasSelection
+            out.addItem(copySelection)
+
+            let copyBlock = NSMenuItem(title: String(localized: "Copy Block"), action: #selector(copyBlock(_:)), keyEquivalent: "")
+            copyBlock.target = self
+            copyBlock.isEnabled = !activeBlockText.isEmpty
+            out.addItem(copyBlock)
+
+            out.addItem(.separator())
+
+            let speak = NSMenuItem(title: String(localized: "Speak"), action: #selector(speakSelectionOrBlock(_:)), keyEquivalent: "")
+            speak.target = self
+            speak.isEnabled = textView.selectedRange().length > 0 || !activeBlockText.isEmpty
+            out.addItem(speak)
+
+            let stop = NSMenuItem(title: String(localized: "Stop Speaking"), action: #selector(stopSpeaking(_:)), keyEquivalent: "")
+            stop.target = self
+            stop.isEnabled = isSpeaking
+            out.addItem(stop)
+
+            return out
+        }
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            let payload: String? = {
+                if let value = link as? String { return value }
+                if let value = link as? URL { return value.absoluteString }
+                return nil
+            }()
+            guard let payload,
+                  let decoded = TranscriptLinkifier.decodePayload(payload) else {
+                return false
+            }
+
+            IDEOpener.open(path: decoded.path,
+                           line: decoded.line,
+                           column: decoded.column,
+                           target: ideTarget,
+                           binaryOverride: ideBinaryOverridePath)
+            return true
+        }
+
+        @objc private func copySelectionOnly(_ sender: Any?) {
+            guard let tv = activeTextView else { return }
+            let sel = tv.selectedRange()
+            guard sel.length > 0 else { return }
+            let s = (tv.string as NSString).substring(with: sel)
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(s, forType: .string)
+        }
+
+        @objc private func copyBlock(_ sender: Any?) {
+            guard !activeBlockText.isEmpty else { return }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(activeBlockText, forType: .string)
+        }
+
+        @objc private func speakSelectionOrBlock(_ sender: Any?) {
+            guard let tv = activeTextView else { return }
+            let selection = tv.selectedRange()
+            let text: String = {
+                if selection.length > 0 {
+                    return (tv.string as NSString).substring(with: selection)
+                }
+                return activeBlockText
+            }()
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier) ?? AVSpeechSynthesisVoice()
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+            utterance.volume = 1.0
+            speechQueue.async { [weak self] in
+                guard let self, let synthesizer = self.speechSynthesizer else { return }
+                if synthesizer.isSpeaking {
+                    synthesizer.stopSpeaking(at: .immediate)
+                }
+                synthesizer.speak(utterance)
+            }
+        }
+
+        @objc private func stopSpeaking(_ sender: Any?) {
+            speechQueue.async { [weak self] in
+                self?.speechSynthesizer?.stopSpeaking(at: .immediate)
+            }
+        }
+
+        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+            DispatchQueue.main.async { [weak self] in
+                self?.isSpeaking = true
+            }
+        }
+
+        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+            DispatchQueue.main.async { [weak self] in
+                self?.isSpeaking = false
+            }
+        }
+
+        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+            DispatchQueue.main.async { [weak self] in
+                self?.isSpeaking = false
+            }
+        }
+
+        // MARK: - Inline images
+
+        func installScrollObserver(scrollView: NSScrollView, textView: TerminalTextView) {
+            if activeScrollView !== scrollView {
+                removeScrollObserver()
+                lastNearBottom = nil
+            }
+
+            activeScrollView = scrollView
+            activeTextView = textView
+
+            if scrollObserver == nil {
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                scrollObserver = NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: scrollView.contentView,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.closeInlineHoverPopover()
+                    self?.scheduleIdleThumbnailLoad(delay: 0.2)
+                    self?.emitBottomProximityIfNeeded()
+                }
+            }
+
+            if observedDocumentView !== scrollView.documentView {
+                if let token = documentFrameObserver {
+                    NotificationCenter.default.removeObserver(token)
+                    documentFrameObserver = nil
+                }
+                observedDocumentView = scrollView.documentView
+                if let documentView = scrollView.documentView {
+                    documentView.postsFrameChangedNotifications = true
+                    documentFrameObserver = NotificationCenter.default.addObserver(
+                        forName: NSView.frameDidChangeNotification,
+                        object: documentView,
+                        queue: .main
+                    ) { [weak self] _ in
+                        self?.emitBottomProximityIfNeeded()
+                    }
+                }
+            }
+
+            // Initial load after first render.
+            scheduleIdleThumbnailLoad(delay: 0.05)
+            emitBottomProximityIfNeeded()
+            scheduleBottomProximityUpdate()
+        }
+
+        private func removeScrollObserver() {
+            if let token = scrollObserver {
+                self.scrollObserver = nil
+                if Thread.isMainThread {
+                    NotificationCenter.default.removeObserver(token)
+                } else {
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.removeObserver(token)
+                    }
+                }
+            }
+
+            if let token = documentFrameObserver {
+                documentFrameObserver = nil
+                if Thread.isMainThread {
+                    NotificationCenter.default.removeObserver(token)
+                } else {
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.removeObserver(token)
+                    }
+                }
+            }
+
+            observedDocumentView = nil
+        }
+
+        func emitBottomProximityIfNeeded(force: Bool = false) {
+            guard let scrollView = activeScrollView else { return }
+            let visibleRect = scrollView.contentView.documentVisibleRect
+            let contentHeight = measuredContentHeight(for: scrollView)
+            let maxOffset = max(0, contentHeight - visibleRect.height)
+            let currentOffset = max(0, min(visibleRect.origin.y, maxOffset))
+            let distanceToBottom = max(0, maxOffset - currentOffset)
+            let nearBottom = distanceToBottom <= Self.nearBottomThreshold
+            guard force || lastNearBottom != nearBottom else { return }
+            lastNearBottom = nearBottom
+            DispatchQueue.main.async { [weak self] in
+                self?.onBottomProximityChange?(nearBottom)
+            }
+        }
+
+        func scheduleBottomProximityUpdate() {
+            for delay in [0.0, 0.05, 0.2] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.emitBottomProximityIfNeeded()
+                }
+            }
+        }
+
+        private func measuredContentHeight(for scrollView: NSScrollView) -> CGFloat {
+            let visibleHeight = scrollView.contentView.documentVisibleRect.height
+            guard let documentView = scrollView.documentView else { return visibleHeight }
+
+            var contentHeight = max(documentView.bounds.height, documentView.frame.height, visibleHeight)
+            if let textView = documentView as? NSTextView,
+               let layoutManager = textView.layoutManager,
+               let textContainer = textView.textContainer {
+                layoutManager.ensureLayout(for: textContainer)
+                let usedHeight = layoutManager.usedRect(for: textContainer).height + (textView.textContainerInset.height * 2)
+                contentHeight = max(contentHeight, usedHeight)
+            }
+            return contentHeight
+        }
+
+        func updateInlineImages(enabled: Bool, imagesByUserBlockIndex: [Int: [InlineSessionImage]], signature: Int, textView: TerminalTextView) {
+            inlineImagesEnabled = enabled
+            lastInlineImagesSignature = signature
+
+            if !enabled {
+                inlineImagesByID = [:]
+                inlineAttachmentsByID = [:]
+                inlineAttachmentRangesByID = [:]
+                inlineDecodeFailedIDs = []
+                inlineThumbnailTasks.values.forEach { $0.cancel() }
+                inlineThumbnailTasks = [:]
+                scrollIdleWorkItem?.cancel()
+                scrollIdleWorkItem = nil
+                closeInlineHoverPopover()
+                return
+            }
+
+            var byID: [String: InlineSessionImage] = [:]
+            for images in imagesByUserBlockIndex.values {
+                for img in images {
+                    byID[img.id] = img
+                }
+            }
+            inlineImagesByID = byID
+
+            indexInlineImageAttachments(in: textView)
+        }
+
+        private func indexInlineImageAttachments(in textView: TerminalTextView) {
+            inlineAttachmentsByID = [:]
+            inlineAttachmentRangesByID = [:]
+
+            guard let ts = textView.textStorage, ts.length > 0 else { return }
+            let full = NSRange(location: 0, length: ts.length)
+            ts.enumerateAttribute(Self.inlineImageIDKey, in: full, options: []) { value, range, _ in
+                guard let id = value as? String else { return }
+                inlineAttachmentRangesByID[id] = range
+                if let att = ts.attribute(.attachment, at: range.location, effectiveRange: nil) as? InlineImageAttachment {
+                    inlineAttachmentsByID[id] = att
+                    if let cached = inlineThumbnailCache[id] {
+                        att.setThumbnail(cached)
+                    }
+                    if inlineDecodeFailedIDs.contains(id) {
+                        att.setFailed(true)
+                    }
+                }
+            }
+        }
+
+        private func scheduleIdleThumbnailLoad(delay: TimeInterval) {
+            scrollIdleWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                self?.loadVisibleThumbnails(prefetchViewports: 1)
+            }
+            scrollIdleWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        }
+
+        private func loadVisibleThumbnails(prefetchViewports: Int) {
+            guard inlineImagesEnabled else { return }
+            guard let tv = activeTextView, let scroll = activeScrollView else { return }
+            guard let lm = tv.layoutManager, let tc = tv.textContainer else { return }
+            guard let ts = tv.textStorage, ts.length > 0 else { return }
+
+            var rect = scroll.contentView.bounds
+            if prefetchViewports > 0 {
+                let pad = rect.height * CGFloat(prefetchViewports)
+                rect = rect.insetBy(dx: 0, dy: -pad)
+            }
+
+            let glyphRange = lm.glyphRange(forBoundingRect: rect, in: tc)
+            let charRange = lm.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+
+            var ids: Set<String> = []
+            ts.enumerateAttribute(Self.inlineImageIDKey, in: charRange, options: []) { value, _, _ in
+                if let id = value as? String {
+                    ids.insert(id)
+                }
+            }
+
+            for id in ids {
+                startThumbnailLoad(id: id)
+            }
+        }
+
+        private func startThumbnailLoad(id: String) {
+            guard inlineImagesEnabled else { return }
+            guard !inlineDecodeFailedIDs.contains(id) else { return }
+            guard inlineThumbnailCache[id] == nil else { return }
+            guard inlineThumbnailTasks[id] == nil else { return }
+            guard let meta = inlineImagesByID[id] else { return }
+
+            let maxDecodedBytes = 25 * 1024 * 1024
+            let maxPixels = 480
+
+            inlineThumbnailTasks[id] = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                let img: NSImage?
+                do {
+                    let decoded = try CodexSessionImagePayload.decodeImageData(payload: meta.payload,
+                                                                              maxDecodedBytes: maxDecodedBytes,
+                                                                              shouldCancel: { Task.isCancelled })
+                    img = CodexSessionImagePayload.makeThumbnail(from: decoded, maxPixelSize: maxPixels)
+                } catch {
+                    img = nil
+                }
+
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.inlineThumbnailTasks[id] = nil
+                    guard let img else {
+                        self.markInlineImageDecodeFailed(id: id)
+                        return
+                    }
+                    self.inlineThumbnailCache[id] = img
+                    self.inlineAttachmentsByID[id]?.setThumbnail(img)
+                    if let tv = self.activeTextView, let range = self.inlineAttachmentRangesByID[id] {
+                        tv.layoutManager?.invalidateDisplay(forCharacterRange: range)
+                    }
+                }
+            }
+        }
+
+        @MainActor
+        private func markInlineImageDecodeFailed(id: String) {
+            inlineDecodeFailedIDs.insert(id)
+            inlineThumbnailCache[id] = nil
+            inlineHoverPreviewCache[id] = nil
+            inlinePreviewFileCache[id] = nil
+            inlineAttachmentsByID[id]?.setFailed(true)
+
+            if inlineHoverImageID == id {
+                inlineHoverController?.setState(image: nil, error: "Unable to decode image.")
+            }
+
+            if let tv = activeTextView, let range = inlineAttachmentRangesByID[id] {
+                tv.layoutManager?.invalidateDisplay(forCharacterRange: range)
+                tv.needsDisplay = true
+            }
+        }
+
+        @MainActor
+        func handleInlineImageOpen(id: String) {
+            guard inlineImagesEnabled else { return }
+            closeInlineHoverPopover()
+            guard let meta = inlineImagesByID[id] else { return }
+            NotificationCenter.default.post(
+                name: .showImagesForInlineImage,
+                object: meta.sessionID,
+                userInfo: ["selectedItemID": id]
+            )
+        }
+
+        @MainActor
+        func handleInlineImageHover(id: String?, anchorRect: NSRect, in view: NSView) {
+            guard inlineImagesEnabled else {
+                closeInlineHoverPopover()
+                return
+            }
+            guard let id else {
+                closeInlineHoverPopover()
+                return
+            }
+            if inlineDecodeFailedIDs.contains(id) {
+                if inlineHoverPopover == nil {
+                    let popover = NSPopover()
+                    popover.behavior = .semitransient
+                    popover.animates = false
+                    inlineHoverPopover = popover
+                }
+                if inlineHoverController == nil {
+                    let controller = InlineImageHoverPreviewViewController()
+                    inlineHoverController = controller
+                    inlineHoverPopover?.contentViewController = controller
+                }
+                inlineHoverImageID = id
+                inlineHoverController?.setState(image: nil, error: "Unable to decode image.")
+                if inlineHoverPopover?.isShown != true {
+                    inlineHoverPopover?.show(relativeTo: anchorRect, of: view, preferredEdge: .maxY)
+                }
+                return
+            }
+
+            let didChangeID = inlineHoverImageID != id
+            if didChangeID {
+                inlineHoverImageID = id
+                inlineHoverTask?.cancel()
+            }
+
+            if inlineHoverPopover == nil {
+                let popover = NSPopover()
+                popover.behavior = .semitransient
+                popover.animates = false
+                inlineHoverPopover = popover
+            }
+
+            if inlineHoverController == nil {
+                let controller = InlineImageHoverPreviewViewController()
+                inlineHoverController = controller
+                inlineHoverPopover?.contentViewController = controller
+            }
+
+            startThumbnailLoad(id: id)
+            let img = inlineHoverPreviewCache[id] ?? inlineThumbnailCache[id]
+            inlineHoverController?.setState(image: img)
+
+            if didChangeID, inlineHoverPopover?.isShown == true {
+                inlineHoverPopover?.performClose(nil)
+            }
+            if inlineHoverPopover?.isShown != true {
+                inlineHoverPopover?.show(relativeTo: anchorRect, of: view, preferredEdge: .maxY)
+            }
+
+            guard inlineHoverPreviewCache[id] == nil else { return }
+            guard let meta = inlineImagesByID[id] else { return }
+
+            let maxDecodedBytes = 25 * 1024 * 1024
+            let maxPixels = 1200
+
+            inlineHoverTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                let preview: NSImage?
+                do {
+                    let decoded = try CodexSessionImagePayload.decodeImageData(payload: meta.payload,
+                                                                              maxDecodedBytes: maxDecodedBytes,
+                                                                              shouldCancel: { Task.isCancelled })
+                    preview = CodexSessionImagePayload.makeThumbnail(from: decoded, maxPixelSize: maxPixels)
+                } catch {
+                    preview = nil
+                }
+
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    guard let preview else {
+                        self.markInlineImageDecodeFailed(id: id)
+                        return
+                    }
+                    self.inlineHoverPreviewCache[id] = preview
+                    if self.inlineHoverImageID == id {
+                        self.inlineHoverController?.setState(image: preview)
+                    }
+                }
+            }
+        }
+
+        fileprivate func closeInlineHoverPopover() {
+            inlineHoverTask?.cancel()
+            inlineHoverTask = nil
+            inlineHoverImageID = nil
+            inlineHoverPopover?.performClose(nil)
+        }
+
+        private func ensureInlinePreviewFileURL(id: String) async -> URL? {
+            if let url = inlinePreviewFileCache[id] { return url }
+            guard let meta = inlineImagesByID[id] else { return nil }
+
+            let maxDecodedBytes = 25 * 1024 * 1024
+            switch meta.payload {
+            case .file(let originalURL, _, _):
+                await MainActor.run { [weak self] in
+                    self?.inlinePreviewFileCache[id] = originalURL
+                }
+                return originalURL
+            case .base64:
+                break
+            }
+
+            let ext = CodexSessionImagePayload.suggestedFileExtension(for: meta.payload.mediaType)
+            let filename = "image-\(String(meta.sessionID.prefix(6)))-\(meta.sessionImageIndex).\(ext)"
+
+            do {
+                // This is triggered by explicit user actions (context menu / Preview / copy / save).
+                // Avoid priority inversions by doing the decode work on the current task's priority.
+                let decoded = try CodexSessionImagePayload.decodeImageData(payload: meta.payload,
+                                                                          maxDecodedBytes: maxDecodedBytes,
+                                                                          shouldCancel: { Task.isCancelled })
+                if Task.isCancelled { return nil }
+
+                let tempRoot = FileManager.default.temporaryDirectory
+                let dir = tempRoot.appendingPathComponent("AgentSessions/InlineImagePreview", isDirectory: true)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let destination = uniqueDestinationURL(in: dir, filename: filename)
+                try decoded.write(to: destination, options: [.atomic])
+
+                await MainActor.run { [weak self] in
+                    self?.inlinePreviewFileCache[id] = destination
+                }
+                return destination
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.markInlineImageDecodeFailed(id: id)
+                }
+                return nil
+            }
+        }
+
+        @MainActor
+        private func openInPreviewApp(_ url: URL) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-a", "Preview", url.path]
+            try? process.run()
+        }
+
+        private func inlineImageContextMenu() -> NSMenu {
+            let out = NSMenu(title: String(localized: "Image"))
+            out.autoenablesItems = false
+
+            let openBrowser = NSMenuItem(title: String(localized: "Open in Image Browser"), action: #selector(openInlineImageInBrowser(_:)), keyEquivalent: "")
+            openBrowser.target = self
+            out.addItem(openBrowser)
+
+            out.addItem(.separator())
+
+            let openPreview = NSMenuItem(title: String(localized: "Open in Preview"), action: #selector(openInlineImageInPreview(_:)), keyEquivalent: "")
+            openPreview.target = self
+            out.addItem(openPreview)
+
+            out.addItem(.separator())
+
+            let copyPath = NSMenuItem(title: String(localized: "Copy Image Path (for CLI agent)"), action: #selector(copyInlineImagePath(_:)), keyEquivalent: "")
+            copyPath.target = self
+            out.addItem(copyPath)
+
+            let copyImage = NSMenuItem(title: String(localized: "Copy Image"), action: #selector(copyInlineImage(_:)), keyEquivalent: "")
+            copyImage.target = self
+            out.addItem(copyImage)
+
+            out.addItem(.separator())
+
+            let saveDownloads = NSMenuItem(title: String(localized: "Save to Downloads"), action: #selector(saveInlineImageToDownloads(_:)), keyEquivalent: "")
+            saveDownloads.target = self
+            out.addItem(saveDownloads)
+
+            let save = NSMenuItem(title: String(localized: "Save…"), action: #selector(saveInlineImageWithPanel(_:)), keyEquivalent: "")
+            save.target = self
+            out.addItem(save)
+
+            return out
+        }
+
+        @objc private func openInlineImageInBrowser(_ sender: Any?) {
+            guard let id = inlineContextImageID else { return }
+            Task { @MainActor in
+                self.handleInlineImageOpen(id: id)
+            }
+        }
+
+        @objc private func openInlineImageInPreview(_ sender: Any?) {
+            guard let id = inlineContextImageID else { return }
+            Task(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                guard let url = await self.ensureInlinePreviewFileURL(id: id) else { return }
+                await MainActor.run {
+                    self.openInPreviewApp(url)
+                }
+            }
+        }
+
+        @objc private func copyInlineImagePath(_ sender: Any?) {
+            guard let id = inlineContextImageID, let meta = inlineImagesByID[id] else { return }
+            let maxDecodedBytes = 25 * 1024 * 1024
+
+            if case .file(let originalURL, _, _) = meta.payload {
+                Task { @MainActor in
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.writeObjects([originalURL as NSURL])
+                    pasteboard.setString(originalURL.path, forType: .string)
+                }
+                return
+            }
+
+            let ext = CodexSessionImagePayload.suggestedFileExtension(for: meta.payload.mediaType)
+            let filename = "image-\(String(meta.sessionID.prefix(6)))-\(meta.sessionImageIndex).\(ext)"
+
+            Task(priority: .userInitiated) {
+                do {
+                    let decoded = try CodexSessionImagePayload.decodeImageData(payload: meta.payload,
+                                                                             maxDecodedBytes: maxDecodedBytes,
+                                                                             shouldCancel: { Task.isCancelled })
+                    if Task.isCancelled { return }
+
+                    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AgentSessions/ImageClipboard", isDirectory: true)
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let destination = uniqueDestinationURL(in: dir, filename: filename)
+                    try decoded.write(to: destination, options: [.atomic])
+
+                    await MainActor.run {
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.writeObjects([destination as NSURL])
+                        pasteboard.setString(destination.path, forType: .string)
+                    }
+                } catch {
+                    // Best-effort copy; no UI error.
+                }
+            }
+        }
+
+        @objc private func copyInlineImage(_ sender: Any?) {
+            guard let id = inlineContextImageID, let meta = inlineImagesByID[id] else { return }
+            let maxDecodedBytes = 25 * 1024 * 1024
+
+            Task(priority: .userInitiated) {
+                do {
+                    let decoded = try CodexSessionImagePayload.decodeImageData(payload: meta.payload,
+                                                                             maxDecodedBytes: maxDecodedBytes,
+                                                                             shouldCancel: { Task.isCancelled })
+                    if Task.isCancelled { return }
+                    guard let image = NSImage(data: decoded) else { return }
+
+                    await MainActor.run {
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.writeObjects([image])
+                        if let tiff = image.tiffRepresentation,
+                           let rep = NSBitmapImageRep(data: tiff),
+                           let png = rep.representation(using: .png, properties: [:]) {
+                            pasteboard.setData(png, forType: .png)
+                        }
+                    }
+                } catch {
+                    // Best-effort copy; no UI error.
+                }
+            }
+        }
+
+        @objc private func saveInlineImageToDownloads(_ sender: Any?) {
+            guard let id = inlineContextImageID, let meta = inlineImagesByID[id] else { return }
+            guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
+            let maxDecodedBytes = 25 * 1024 * 1024
+            let ext = CodexSessionImagePayload.suggestedFileExtension(for: meta.payload.mediaType)
+            let filename = "image-\(String(meta.sessionID.prefix(6)))-\(meta.sessionImageIndex).\(ext)"
+            let destination = uniqueDestinationURL(in: downloads, filename: filename)
+
+            Task(priority: .userInitiated) {
+                do {
+                    let decoded = try CodexSessionImagePayload.decodeImageData(payload: meta.payload,
+                                                                             maxDecodedBytes: maxDecodedBytes,
+                                                                             shouldCancel: { Task.isCancelled })
+                    if Task.isCancelled { return }
+                    try decoded.write(to: destination, options: [.atomic])
+                } catch {
+                    // Best-effort save; no UI error.
+                }
+            }
+        }
+
+        @objc private func saveInlineImageWithPanel(_ sender: Any?) {
+            guard let id = inlineContextImageID, let meta = inlineImagesByID[id] else { return }
+
+            let ext = CodexSessionImagePayload.suggestedFileExtension(for: meta.payload.mediaType)
+            let utType = CodexSessionImagePayload.suggestedUTType(for: meta.payload.mediaType)
+            let filename = "image-\(String(meta.sessionID.prefix(6)))-\(meta.sessionImageIndex).\(ext)"
+
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [utType]
+            panel.canCreateDirectories = true
+            panel.isExtensionHidden = false
+            panel.nameFieldStringValue = filename
+
+            let maxDecodedBytes = 25 * 1024 * 1024
+
+            let destinationKeyWindow = NSApp.keyWindow
+            let onComplete: (NSApplication.ModalResponse) -> Void = { response in
+                guard response == .OK, let destination = panel.url else { return }
+                Task(priority: .userInitiated) {
+                    do {
+                        let decoded = try CodexSessionImagePayload.decodeImageData(payload: meta.payload,
+                                                                                 maxDecodedBytes: maxDecodedBytes,
+                                                                                 shouldCancel: { Task.isCancelled })
+                        if Task.isCancelled { return }
+                        try decoded.write(to: destination, options: [.atomic])
+                    } catch {
+                        // Best-effort save; no UI error.
+                    }
+                }
+            }
+
+            if let win = destinationKeyWindow {
+                panel.beginSheetModal(for: win, completionHandler: onComplete)
+            } else {
+                onComplete(panel.runModal())
+            }
+        }
+
+        private func uniqueDestinationURL(in dir: URL, filename: String) -> URL {
+            let base = (filename as NSString).deletingPathExtension
+            let ext = (filename as NSString).pathExtension
+            var candidate = dir.appendingPathComponent(filename)
+            var counter = 2
+            while FileManager.default.fileExists(atPath: candidate.path) {
+                let next = "\(base)-\(counter).\(ext)"
+                candidate = dir.appendingPathComponent(next)
+                counter += 1
+            }
+            return candidate
+        }
+
+        private func blockText(at charIndex: Int) -> String? {
+            guard !lines.isEmpty else { return nil }
+            guard let lineIndex = lineIndex(at: charIndex) else { return nil }
+            let block = lines[lineIndex].decorationGroupID
+
+            var start = lineIndex
+            while start > 0, lines[start - 1].decorationGroupID == block {
+                start -= 1
+            }
+            var end = lineIndex
+            while end + 1 < lines.count, lines[end + 1].decorationGroupID == block {
+                end += 1
+            }
+
+            let chunk = lines[start...end].map(\.text).joined(separator: "\n")
+            let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        private func lineIndex(at charIndex: Int) -> Int? {
+            let ranges = orderedLineRanges
+            guard !ranges.isEmpty else { return nil }
+
+            var low = 0
+            var high = ranges.count - 1
+            while low <= high {
+                let mid = (low + high) / 2
+                let r = ranges[mid]
+                if charIndex < r.location {
+                    high = mid - 1
+                    continue
+                }
+                if charIndex >= (r.location + r.length) {
+                    low = mid + 1
+                    continue
+                }
+                return mid
+            }
+            return nil
+        }
+    }
+
+	    final class TerminalTextView: NSTextView {
+		        weak var inlineImageCoordinator: Coordinator?
+
+		        private var mouseDownLocationInWindow: NSPoint? = nil
+		        private var hoverTrackingArea: NSTrackingArea? = nil
+	
+	        private func inlineImageHit(at point: NSPoint) -> (id: String, range: NSRange)? {
+	            guard let ts = textStorage, ts.length > 0 else { return nil }
+	            guard let lm = layoutManager, let tc = textContainer else { return nil }
+
+	            // Layout manager coordinates are in text-container space (not view space).
+	            let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+
+	            // TextKit layout is lazy (and we allow non-contiguous layout). Ensure the relevant geometry exists
+	            // so bounding rects are non-zero immediately after scroll/content updates.
+	            let probe = NSRect(x: containerPoint.x - 2, y: containerPoint.y - 2, width: 4, height: 4)
+	            lm.ensureLayout(forBoundingRect: probe, in: tc)
+
+	            func matchAt(_ c: Int) -> (id: String, range: NSRange)? {
+	                guard c >= 0 && c < ts.length else { return nil }
+	                var effectiveRange = NSRange(location: NSNotFound, length: 0)
+	                guard let id = ts.attribute(Coordinator.inlineImageIDKey, at: c, effectiveRange: &effectiveRange) as? String,
+	                      effectiveRange.location != NSNotFound else { return nil }
+	                let glyphs = lm.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
+	                if glyphs.location == NSNotFound || glyphs.length == 0 { return nil }
+	                lm.ensureLayout(forGlyphRange: glyphs)
+	                var rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+	                rect = rect.insetBy(dx: -4, dy: -4)
+	                guard rect.contains(containerPoint) else { return nil }
+	                return (id, effectiveRange)
+	            }
+
+	            // Prefer glyph hit testing (more reliable around attachments, tabs, and insertion points).
+	            var fraction: CGFloat = 0
+	            let glyphIndex = lm.glyphIndex(for: containerPoint, in: tc, fractionOfDistanceThroughGlyph: &fraction)
+	            if glyphIndex != NSNotFound, glyphIndex < lm.numberOfGlyphs {
+	                let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
+	                if let hit = matchAt(charIndex) ?? matchAt(charIndex - 1) ?? matchAt(charIndex + 1) {
+	                    return hit
+	                }
+	            }
+
+	            // Fallback to point->character mapping, but allow small index drift around attachments.
+	            let idx = lm.characterIndex(for: containerPoint, in: tc, fractionOfDistanceBetweenInsertionPoints: nil)
+	            guard idx != NSNotFound else { return nil }
+	            if let hit = matchAt(idx) ?? matchAt(idx - 1) ?? matchAt(idx + 1) {
+	                return hit
+	            }
+
+	            // Fallback: scan a small neighborhood and use bounding boxes for confirmation.
+	            let start = max(0, idx - 8)
+	            let end = min(ts.length, idx + 8)
+	            let scan = NSRange(location: start, length: max(0, end - start))
+	            if scan.length == 0 { return nil }
+
+	            var found: (id: String, range: NSRange)? = nil
+	            ts.enumerateAttribute(Coordinator.inlineImageIDKey, in: scan, options: []) { value, range, stop in
+	                guard let id = value as? String else { return }
+	                let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+	                if glyphs.location == NSNotFound || glyphs.length == 0 { return }
+	                lm.ensureLayout(forGlyphRange: glyphs)
+	                var rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+	                rect = rect.insetBy(dx: -4, dy: -4)
+	                if rect.contains(containerPoint) {
+	                    found = (id, range)
+	                    stop.pointee = true
+	                }
+	            }
+	            return found
+	        }
+
+	        private func inlineImageIDWithEffectiveRange(at point: NSPoint) -> (id: String, range: NSRange)? {
+	            inlineImageHit(at: point)
+	        }
+
+		        override func mouseDown(with event: NSEvent) {
+		            // Dismiss the hover preview so it doesn't steal the click.
+		            inlineImageCoordinator?.closeInlineHoverPopover()
+
+		            if event.type == .leftMouseDown {
+		                mouseDownLocationInWindow = event.locationInWindow
+
+		                // Single-click on an inline image opens the Image Browser.
+		                // Must be handled here (before super) because NSTextView's
+		                // mouseDown enters a tracking loop that swallows mouseUp.
+		                if let coordinator = inlineImageCoordinator,
+		                   event.clickCount == 1,
+		                   !event.modifierFlags.contains(.command),
+		                   !event.modifierFlags.contains(.shift),
+		                   !event.modifierFlags.contains(.control),
+		                   !event.modifierFlags.contains(.option) {
+		                    let point = convert(event.locationInWindow, from: nil)
+		                    if let hit = inlineImageIDWithEffectiveRange(at: point) {
+		                        coordinator.handleInlineImageOpen(id: hit.id)
+		                        return
+		                    }
+		                }
+		            } else {
+		                mouseDownLocationInWindow = nil
+		            }
+		            super.mouseDown(with: event)
+		        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.acceptsMouseMovedEvents = true
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+
+            if let hoverTrackingArea {
+                removeTrackingArea(hoverTrackingArea)
+            }
+
+            let options: NSTrackingArea.Options = [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect]
+            let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+            addTrackingArea(area)
+            hoverTrackingArea = area
+        }
+
+	        override func mouseMoved(with event: NSEvent) {
+	            super.mouseMoved(with: event)
+
+	            guard let inlineImageCoordinator else { return }
+	            let point = convert(event.locationInWindow, from: nil)
+	            guard let hit = inlineImageIDWithEffectiveRange(at: point) else {
+	                Task { @MainActor in
+	                    inlineImageCoordinator.handleInlineImageHover(id: nil, anchorRect: .zero, in: self)
+	                }
+	                return
+	            }
+	            guard let lm = layoutManager, let tc = textContainer else { return }
+	            let charRange = NSRange(location: hit.range.location, length: max(1, hit.range.length))
+	            let glyphRange = lm.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+	            lm.ensureLayout(forGlyphRange: glyphRange)
+	            var rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+	            rect.origin.x += textContainerOrigin.x
+	            rect.origin.y += textContainerOrigin.y
+	            rect = rect.insetBy(dx: -4, dy: -4)
+
+	            Task { @MainActor in
+	                inlineImageCoordinator.handleInlineImageHover(id: hit.id, anchorRect: rect, in: self)
+	            }
+	        }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+            true
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            super.mouseExited(with: event)
+            Task { @MainActor in
+                inlineImageCoordinator?.handleInlineImageHover(id: nil, anchorRect: .zero, in: self)
+            }
+        }
+
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 48, !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.control), !event.modifierFlags.contains(.option) {
+                if event.modifierFlags.contains(.shift) {
+                    window?.selectPreviousKeyView(nil)
+                } else {
+                    window?.selectNextKeyView(nil)
+                }
+                return
+            }
+            super.keyDown(with: event)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    private var effectiveUnifiedMatchOccurrences: [MatchOccurrence] {
+        unifiedHighlightActive ? unifiedMatchOccurrences : []
+    }
+
+    private var effectiveUnifiedCurrentMatchLineID: Int? {
+        unifiedHighlightActive ? unifiedCurrentMatchLineID : nil
+    }
+
+    private var effectiveFindCurrentMatchLineID: Int? {
+        findHighlightActive ? findCurrentMatchLineID : nil
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+
+        let textStorage = NSTextStorage()
+        let layoutManager = TerminalLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: NSSize(width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+
+        let textView = TerminalTextView(frame: NSRect(origin: .zero, size: scroll.contentSize), textContainer: container)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.usesFindPanel = true
+        textView.delegate = context.coordinator
+        textView.inlineImageCoordinator = context.coordinator
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.minSize = NSSize(width: 0, height: scroll.contentSize.height)
+        textView.autoresizingMask = [.width]
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.layoutManager?.allowsNonContiguousLayout = true
+        textView.backgroundColor = NSColor.textBackgroundColor
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.linkColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+
+        scroll.documentView = textView
+
+        context.coordinator.activeLayoutManager = layoutManager
+        context.coordinator.ideTarget = ideTarget
+        context.coordinator.ideBinaryOverridePath = ideBinaryOverridePath
+        context.coordinator.onBottomProximityChange = onBottomProximityChange
+        context.coordinator.installScrollObserver(scrollView: scroll, textView: textView)
+        applyContent(to: textView, context: context)
+        context.coordinator.lastLinesSignature = lineSignature
+        context.coordinator.lastFontSize = fontSize
+        context.coordinator.lastMonochrome = monochrome
+        context.coordinator.lastColorScheme = colorScheme
+        context.coordinator.lastInlineImagesSignature = inlineImagesSignature
+        context.coordinator.lastShowCodeDiffLineNumbers = showCodeDiffLineNumbers
+        context.coordinator.lastLinkificationEnabled = linkificationEnabled
+        context.coordinator.lastUnifiedFindQuery = unifiedFindQuery
+        context.coordinator.lastUnifiedAutoScrollToken = unifiedFindToken
+        context.coordinator.lastUnifiedMatchOccurrences = effectiveUnifiedMatchOccurrences
+        context.coordinator.lastUnifiedCurrentMatchLineID = effectiveUnifiedCurrentMatchLineID
+        context.coordinator.lastFindQuery = findQuery
+        context.coordinator.lastFindAutoScrollToken = findToken
+        context.coordinator.lastFindCurrentMatchLineID = effectiveFindCurrentMatchLineID
+        context.coordinator.lastRoleNavScrollToken = roleNavScrollToken
+        context.coordinator.lastFocusRequestToken = focusRequestToken
+        context.coordinator.lastImageHighlightToken = imageHighlightToken
+        context.coordinator.lastScrollToBottomToken = scrollToBottomToken
+        context.coordinator.lastProximityContextID = proximityContextID
+        context.coordinator.emitBottomProximityIfNeeded(force: true)
+        context.coordinator.scheduleBottomProximityUpdate()
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let tv = nsView.documentView as? TerminalTextView else { return }
+        context.coordinator.ideTarget = ideTarget
+        context.coordinator.ideBinaryOverridePath = ideBinaryOverridePath
+        context.coordinator.onBottomProximityChange = onBottomProximityChange
+        context.coordinator.installScrollObserver(scrollView: nsView, textView: tv)
+
+        let proximityContextChanged = context.coordinator.lastProximityContextID != proximityContextID
+        if proximityContextChanged {
+            context.coordinator.lastProximityContextID = proximityContextID
+            context.coordinator.lastNearBottom = nil
+            context.coordinator.emitBottomProximityIfNeeded(force: true)
+        }
+        var needsBottomProximityRefresh = proximityContextChanged
+
+        let lineSig = lineSignature
+        let fontChanged = abs((context.coordinator.lastFontSize) - fontSize) > 0.1
+        let monochromeChanged = context.coordinator.lastMonochrome != monochrome
+        let schemeChanged = context.coordinator.lastColorScheme != colorScheme
+        let inlineChanged = context.coordinator.lastInlineImagesSignature != inlineImagesSignature
+        let inlineEnabledChanged = context.coordinator.inlineImagesEnabled != inlineImagesEnabled
+        let showCodeDiffLineNumbersChanged = context.coordinator.lastShowCodeDiffLineNumbers != showCodeDiffLineNumbers
+        let linkificationChanged = context.coordinator.lastLinkificationEnabled != linkificationEnabled
+        let needsReload = lineSig != context.coordinator.lastLinesSignature || fontChanged || monochromeChanged || schemeChanged || inlineChanged || inlineEnabledChanged || showCodeDiffLineNumbersChanged || linkificationChanged
+        let patchStrategy = SessionTerminalView.tailPatchStrategy(previous: context.coordinator.lines, current: lines)
+        let canTailPatchReload =
+            lineSig != context.coordinator.lastLinesSignature &&
+            patchStrategy != nil &&
+            !fontChanged &&
+            !monochromeChanged &&
+            !schemeChanged &&
+            !inlineChanged &&
+            !inlineEnabledChanged &&
+            !showCodeDiffLineNumbersChanged &&
+            !linkificationChanged
+
+        if needsReload {
+            if canTailPatchReload, let patchStrategy {
+                switch patchStrategy {
+                case let .append(startIndex):
+                    appendTailContent(to: tv, context: context, startIndex: startIndex)
+                case let .replaceSuffix(startIndex):
+                    replaceTailContent(to: tv, context: context, startIndex: startIndex)
+                }
+            } else {
+                applyContent(to: tv, context: context)
+            }
+            context.coordinator.lastLinesSignature = lineSig
+            context.coordinator.lastFontSize = fontSize
+            context.coordinator.lastMonochrome = monochrome
+            context.coordinator.lastColorScheme = colorScheme
+            context.coordinator.lastInlineImagesSignature = inlineImagesSignature
+            context.coordinator.lastShowCodeDiffLineNumbers = showCodeDiffLineNumbers
+            context.coordinator.lastLinkificationEnabled = linkificationEnabled
+            needsBottomProximityRefresh = true
+        } else {
+            let unifiedChanged =
+                context.coordinator.lastUnifiedMatchOccurrences != effectiveUnifiedMatchOccurrences ||
+                context.coordinator.lastUnifiedCurrentMatchLineID != effectiveUnifiedCurrentMatchLineID ||
+                context.coordinator.lastUnifiedFindQuery != unifiedFindQuery
+            if unifiedChanged {
+                updateUnifiedHighlights(in: tv,
+                                       context: context,
+                                       query: unifiedFindQuery,
+                                       occurrences: effectiveUnifiedMatchOccurrences,
+                                       currentLineID: effectiveUnifiedCurrentMatchLineID)
+            }
+
+            let findChanged =
+                context.coordinator.lastFindQuery != findQuery ||
+                context.coordinator.lastFindCurrentMatchLineID != effectiveFindCurrentMatchLineID
+            if findChanged {
+                updateLocalFindOverlay(in: tv,
+                                       context: context,
+                                       query: findQuery,
+                                       currentLineID: effectiveFindCurrentMatchLineID)
+            }
+        }
+
+        if allowMatchAutoScroll,
+           findHighlightActive,
+           findToken != context.coordinator.lastFindAutoScrollToken,
+           let target = effectiveFindCurrentMatchLineID,
+           let range = context.coordinator.lineRanges[target] {
+            tv.scrollRangeToVisible(range)
+            context.coordinator.lastFindAutoScrollToken = findToken
+        } else if unifiedAllowMatchAutoScroll,
+                  unifiedHighlightActive,
+                  unifiedFindToken != context.coordinator.lastUnifiedAutoScrollToken,
+                  let target = effectiveUnifiedCurrentMatchLineID,
+                  let range = context.coordinator.lineRanges[target] {
+            tv.scrollRangeToVisible(range)
+            context.coordinator.lastUnifiedAutoScrollToken = unifiedFindToken
+        }
+
+        if scrollTargetToken != context.coordinator.lastScrollToken,
+           let target = scrollTargetLineID,
+           let range = context.coordinator.lineRanges[target] {
+            scrollRangeToTop(tv, range: range)
+            context.coordinator.lastScrollToken = scrollTargetToken
+        }
+
+        if roleNavScrollToken != context.coordinator.lastRoleNavScrollToken,
+           let target = roleNavScrollTargetLineID,
+           let range = context.coordinator.lineRanges[target] {
+            tv.scrollRangeToVisible(range)
+            context.coordinator.lastRoleNavScrollToken = roleNavScrollToken
+        }
+
+        if scrollToBottomToken != context.coordinator.lastScrollToBottomToken {
+            scrollToBottom(tv)
+            context.coordinator.lastScrollToBottomToken = scrollToBottomToken
+            context.coordinator.emitBottomProximityIfNeeded(force: true)
+            needsBottomProximityRefresh = true
+        }
+
+        if context.coordinator.lastImageHighlightToken != imageHighlightToken {
+            context.coordinator.lastImageHighlightToken = imageHighlightToken
+            if let lm = (tv.layoutManager as? TerminalLayoutManager) ?? context.coordinator.activeLayoutManager {
+                lm.blocks = buildBlockDecorations(ranges: context.coordinator.lineRanges)
+                tv.setNeedsDisplay(tv.bounds)
+            }
+        }
+
+        if context.coordinator.lastFocusRequestToken != focusRequestToken {
+            context.coordinator.lastFocusRequestToken = focusRequestToken
+            if let window = tv.window {
+                window.makeFirstResponder(tv)
+            }
+        }
+
+        context.coordinator.emitBottomProximityIfNeeded()
+        if needsBottomProximityRefresh {
+            context.coordinator.scheduleBottomProximityUpdate()
+        }
+    }
+
+    private func scrollToBottom(_ tv: NSTextView) {
+        guard !tv.string.isEmpty else {
+            if let scrollView = tv.enclosingScrollView {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+            return
+        }
+        let length = (tv.string as NSString).length
+        tv.scrollRangeToVisible(NSRange(location: max(0, length - 1), length: 1))
+    }
+
+    private func scrollRangeToTop(_ tv: NSTextView, range: NSRange) {
+        guard let scrollView = tv.enclosingScrollView,
+              let lm = tv.layoutManager,
+              let tc = tv.textContainer else {
+            tv.scrollRangeToVisible(range)
+            return
+        }
+
+        lm.ensureLayout(for: tc)
+        let glyph = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = lm.boundingRect(forGlyphRange: glyph, in: tc)
+        let origin = tv.textContainerOrigin
+        rect.origin.x += origin.x
+        rect.origin.y += origin.y
+
+        let padding = max(0, tv.textContainerInset.height)
+        let y = max(0, rect.minY - padding)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func applyContent(to textView: NSTextView, context: Context) {
+        // Ensure container tracks width (also used for inline thumbnail sizing).
+        let width = max(1, textView.enclosingScrollView?.contentSize.width ?? textView.bounds.width)
+
+        let (attr, ranges) = buildAttributedString(containerWidth: width)
+        context.coordinator.lineRanges = ranges
+        context.coordinator.lineRoles = Dictionary(uniqueKeysWithValues: lines.map { ($0.id, $0.role) })
+        context.coordinator.lines = lines
+        context.coordinator.orderedLineRanges = lines.compactMap { ranges[$0.id] }
+        context.coordinator.orderedLineIDs = lines.map(\.id)
+        context.coordinator.lastUnifiedMatchOccurrences = effectiveUnifiedMatchOccurrences
+        context.coordinator.lastUnifiedCurrentMatchLineID = effectiveUnifiedCurrentMatchLineID
+        context.coordinator.lastUnifiedFindQuery = unifiedFindQuery
+        context.coordinator.lastFindQuery = findQuery
+        context.coordinator.lastFindCurrentMatchLineID = effectiveFindCurrentMatchLineID
+        textView.textStorage?.setAttributedString(attr)
+
+        if let tv = textView as? TerminalTextView {
+            context.coordinator.updateInlineImages(enabled: inlineImagesEnabled,
+                                                  imagesByUserBlockIndex: inlineImagesByUserBlockIndex,
+                                                  signature: inlineImagesSignature,
+                                                  textView: tv)
+        }
+
+        if let lm = (textView.layoutManager as? TerminalLayoutManager) ?? context.coordinator.activeLayoutManager {
+            lm.isDark = (colorScheme == .dark)
+            lm.agentBrandAccent = TranscriptColorSystem.agentBrandAccent(source: sessionSource)
+            lm.lineIndex = zip(lines.map(\.id), lines.compactMap { ranges[$0.id] }).map { TerminalLayoutManager.LineIndexEntry(id: $0.0, range: $0.1) }
+            lm.blocks = buildBlockDecorations(ranges: ranges)
+            updateLayoutManagerUnifiedFind(lm,
+                                           query: unifiedFindQuery,
+                                           occurrences: effectiveUnifiedMatchOccurrences,
+                                           currentLineID: effectiveUnifiedCurrentMatchLineID)
+            updateLayoutManagerLocalFind(lm,
+                                         query: findQuery,
+                                         currentLineID: effectiveFindCurrentMatchLineID,
+                                         ranges: ranges)
+        }
+
+        textView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+    }
+
+    private func semanticLineNumberCounters(before endIndex: Int) -> [Int: Int] {
+        guard showCodeDiffLineNumbers, endIndex > 0 else { return [:] }
+        let prefixLines = lines.prefix(endIndex)
+        guard !prefixLines.isEmpty else { return [:] }
+
+        var counters: [Int: Int] = [:]
+        counters.reserveCapacity(32)
+        for (idx, line) in prefixLines.enumerated() {
+            let previousDecorationGroupID = idx > 0 ? lines[idx - 1].decorationGroupID : nil
+            let isFirstLineOfBlock = previousDecorationGroupID != line.decorationGroupID
+            _ = renderedTranscriptLineText(line,
+                                           showCodeDiffLineNumbers: showCodeDiffLineNumbers,
+                                           isFirstLineOfBlock: isFirstLineOfBlock,
+                                           semanticLineNumberCounters: &counters)
+        }
+        return counters
+    }
+
+    private func appendTailContent(to textView: NSTextView, context: Context, startIndex: Int) {
+        guard startIndex >= 0, startIndex < lines.count else {
+            applyContent(to: textView, context: context)
+            return
+        }
+        guard let storage = textView.textStorage else {
+            applyContent(to: textView, context: context)
+            return
+        }
+
+        let width = max(1, textView.enclosingScrollView?.contentSize.width ?? textView.bounds.width)
+        let previousDecorationGroupID = startIndex > 0 ? lines[startIndex - 1].decorationGroupID : nil
+        let tailLines = Array(lines[startIndex...])
+        let initialSemanticLineNumberCounters = semanticLineNumberCounters(before: startIndex)
+
+        if startIndex > 0, storage.length > 0, !storage.string.hasSuffix("\n") {
+            storage.append(NSAttributedString(string: "\n"))
+            let previousLineID = lines[startIndex - 1].id
+            if var previousRange = context.coordinator.lineRanges[previousLineID] {
+                previousRange.length += 1
+                context.coordinator.lineRanges[previousLineID] = previousRange
+                if let previousIndex = context.coordinator.orderedLineIDs.firstIndex(of: previousLineID),
+                   context.coordinator.orderedLineRanges.indices.contains(previousIndex) {
+                    context.coordinator.orderedLineRanges[previousIndex] = previousRange
+                }
+            }
+        }
+
+        let (tailAttr, tailRangesRelative) = buildAttributedString(
+            containerWidth: width,
+            renderedLines: tailLines,
+            previousDecorationGroupID: previousDecorationGroupID,
+            initialSemanticLineNumberCounters: initialSemanticLineNumberCounters
+        )
+        let baseLocation = storage.length
+        storage.append(tailAttr)
+
+        var mergedRanges = context.coordinator.lineRanges
+        mergedRanges.reserveCapacity(lines.count)
+        var mergedOrderedRanges = context.coordinator.orderedLineRanges
+        mergedOrderedRanges.reserveCapacity(lines.count)
+        var mergedOrderedIDs = context.coordinator.orderedLineIDs
+        mergedOrderedIDs.reserveCapacity(lines.count)
+
+        for line in tailLines {
+            guard let relativeRange = tailRangesRelative[line.id] else { continue }
+            let shifted = NSRange(location: baseLocation + relativeRange.location, length: relativeRange.length)
+            mergedRanges[line.id] = shifted
+            mergedOrderedIDs.append(line.id)
+            mergedOrderedRanges.append(shifted)
+        }
+
+        context.coordinator.lineRanges = mergedRanges
+        context.coordinator.lineRoles = Dictionary(uniqueKeysWithValues: lines.map { ($0.id, $0.role) })
+        context.coordinator.lines = lines
+        context.coordinator.orderedLineRanges = mergedOrderedRanges
+        context.coordinator.orderedLineIDs = mergedOrderedIDs
+        context.coordinator.lastUnifiedMatchOccurrences = effectiveUnifiedMatchOccurrences
+        context.coordinator.lastUnifiedCurrentMatchLineID = effectiveUnifiedCurrentMatchLineID
+        context.coordinator.lastUnifiedFindQuery = unifiedFindQuery
+        context.coordinator.lastFindQuery = findQuery
+        context.coordinator.lastFindCurrentMatchLineID = effectiveFindCurrentMatchLineID
+
+        if let tv = textView as? TerminalTextView {
+            context.coordinator.updateInlineImages(enabled: inlineImagesEnabled,
+                                                  imagesByUserBlockIndex: inlineImagesByUserBlockIndex,
+                                                  signature: inlineImagesSignature,
+                                                  textView: tv)
+        }
+
+        if let lm = (textView.layoutManager as? TerminalLayoutManager) ?? context.coordinator.activeLayoutManager {
+            lm.isDark = (colorScheme == .dark)
+            lm.agentBrandAccent = TranscriptColorSystem.agentBrandAccent(source: sessionSource)
+            lm.lineIndex = zip(lines.map(\.id), lines.compactMap { mergedRanges[$0.id] }).map {
+                TerminalLayoutManager.LineIndexEntry(id: $0.0, range: $0.1)
+            }
+            lm.blocks = buildBlockDecorations(ranges: mergedRanges)
+            updateLayoutManagerUnifiedFind(lm,
+                                           query: unifiedFindQuery,
+                                           occurrences: effectiveUnifiedMatchOccurrences,
+                                           currentLineID: effectiveUnifiedCurrentMatchLineID)
+            updateLayoutManagerLocalFind(lm,
+                                         query: findQuery,
+                                         currentLineID: effectiveFindCurrentMatchLineID,
+                                         ranges: mergedRanges)
+            textView.setNeedsDisplay(textView.bounds)
+        }
+
+        textView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+    }
+
+    private func replaceTailContent(to textView: NSTextView, context: Context, startIndex: Int) {
+        guard startIndex >= 0, startIndex < lines.count else {
+            applyContent(to: textView, context: context)
+            return
+        }
+        guard let storage = textView.textStorage else {
+            applyContent(to: textView, context: context)
+            return
+        }
+
+        let width = max(1, textView.enclosingScrollView?.contentSize.width ?? textView.bounds.width)
+        let previousLineIDs = context.coordinator.orderedLineIDs
+        let replacementStart: Int
+        if startIndex < previousLineIDs.count,
+           let range = context.coordinator.lineRanges[previousLineIDs[startIndex]] {
+            replacementStart = range.location
+        } else if startIndex == previousLineIDs.count {
+            replacementStart = storage.length
+        } else {
+            applyContent(to: textView, context: context)
+            return
+        }
+
+        let previousDecorationGroupID = startIndex > 0 ? lines[startIndex - 1].decorationGroupID : nil
+        let replacementLines = Array(lines[startIndex...])
+        let initialSemanticLineNumberCounters = semanticLineNumberCounters(before: startIndex)
+        let (replacementAttr, replacementRangesRelative) = buildAttributedString(
+            containerWidth: width,
+            renderedLines: replacementLines,
+            previousDecorationGroupID: previousDecorationGroupID,
+            initialSemanticLineNumberCounters: initialSemanticLineNumberCounters
+        )
+
+        storage.beginEditing()
+        storage.replaceCharacters(
+            in: NSRange(location: replacementStart, length: max(0, storage.length - replacementStart)),
+            with: replacementAttr
+        )
+        storage.endEditing()
+
+        var mergedRanges: [Int: NSRange] = [:]
+        mergedRanges.reserveCapacity(lines.count)
+        var mergedOrderedRanges: [NSRange] = []
+        mergedOrderedRanges.reserveCapacity(lines.count)
+        var mergedOrderedIDs: [Int] = []
+        mergedOrderedIDs.reserveCapacity(lines.count)
+
+        if startIndex > 0 {
+            for idx in 0..<startIndex {
+                let line = lines[idx]
+                guard let priorRange = context.coordinator.lineRanges[line.id] else {
+                    applyContent(to: textView, context: context)
+                    return
+                }
+                mergedRanges[line.id] = priorRange
+                mergedOrderedIDs.append(line.id)
+                mergedOrderedRanges.append(priorRange)
+            }
+        }
+
+        for line in replacementLines {
+            guard let relativeRange = replacementRangesRelative[line.id] else { continue }
+            let shifted = NSRange(location: replacementStart + relativeRange.location, length: relativeRange.length)
+            mergedRanges[line.id] = shifted
+            mergedOrderedIDs.append(line.id)
+            mergedOrderedRanges.append(shifted)
+        }
+
+        context.coordinator.lineRanges = mergedRanges
+        context.coordinator.lineRoles = Dictionary(uniqueKeysWithValues: lines.map { ($0.id, $0.role) })
+        context.coordinator.lines = lines
+        context.coordinator.orderedLineRanges = mergedOrderedRanges
+        context.coordinator.orderedLineIDs = mergedOrderedIDs
+        context.coordinator.lastUnifiedMatchOccurrences = effectiveUnifiedMatchOccurrences
+        context.coordinator.lastUnifiedCurrentMatchLineID = effectiveUnifiedCurrentMatchLineID
+        context.coordinator.lastUnifiedFindQuery = unifiedFindQuery
+        context.coordinator.lastFindQuery = findQuery
+        context.coordinator.lastFindCurrentMatchLineID = effectiveFindCurrentMatchLineID
+
+        if let tv = textView as? TerminalTextView {
+            context.coordinator.updateInlineImages(enabled: inlineImagesEnabled,
+                                                  imagesByUserBlockIndex: inlineImagesByUserBlockIndex,
+                                                  signature: inlineImagesSignature,
+                                                  textView: tv)
+        }
+
+        if let lm = (textView.layoutManager as? TerminalLayoutManager) ?? context.coordinator.activeLayoutManager {
+            lm.isDark = (colorScheme == .dark)
+            lm.agentBrandAccent = TranscriptColorSystem.agentBrandAccent(source: sessionSource)
+            lm.lineIndex = zip(lines.map(\.id), lines.compactMap { mergedRanges[$0.id] }).map {
+                TerminalLayoutManager.LineIndexEntry(id: $0.0, range: $0.1)
+            }
+            lm.blocks = buildBlockDecorations(ranges: mergedRanges)
+            updateLayoutManagerUnifiedFind(lm,
+                                           query: unifiedFindQuery,
+                                           occurrences: effectiveUnifiedMatchOccurrences,
+                                           currentLineID: effectiveUnifiedCurrentMatchLineID)
+            updateLayoutManagerLocalFind(lm,
+                                         query: findQuery,
+                                         currentLineID: effectiveFindCurrentMatchLineID,
+                                         ranges: mergedRanges)
+            textView.setNeedsDisplay(textView.bounds)
+        }
+
+        textView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+    }
+
+    private func updateUnifiedHighlights(in textView: NSTextView, context: Context, query: String, occurrences: [MatchOccurrence], currentLineID: Int?) {
+        guard let lm = (textView.layoutManager as? TerminalLayoutManager) ?? context.coordinator.activeLayoutManager else { return }
+        lm.isDark = (colorScheme == .dark)
+        updateLayoutManagerUnifiedFind(lm,
+                                       query: query,
+                                       occurrences: occurrences,
+                                       currentLineID: currentLineID)
+        textView.setNeedsDisplay(textView.bounds)
+        context.coordinator.lastUnifiedFindQuery = query
+        context.coordinator.lastUnifiedMatchOccurrences = occurrences
+        context.coordinator.lastUnifiedCurrentMatchLineID = currentLineID
+    }
+
+    private func updateLocalFindOverlay(in textView: NSTextView, context: Context, query: String, currentLineID: Int?) {
+        guard let lm = (textView.layoutManager as? TerminalLayoutManager) ?? context.coordinator.activeLayoutManager else { return }
+        lm.isDark = (colorScheme == .dark)
+        updateLayoutManagerLocalFind(lm, query: query, currentLineID: currentLineID, ranges: context.coordinator.lineRanges)
+        textView.setNeedsDisplay(textView.bounds)
+        context.coordinator.lastFindQuery = query
+        context.coordinator.lastFindCurrentMatchLineID = currentLineID
+    }
+
+    private func buildBlockDecorations(ranges: [Int: NSRange]) -> [TerminalLayoutManager.BlockDecoration] {
+        var out: [TerminalLayoutManager.BlockDecoration] = []
+        out.reserveCapacity(64)
+
+        var startIdx: Int? = nil
+        var currentBlock: Int? = nil
+        var currentDecorationGroup: Int? = nil
+        var rolesInBlock: Set<TerminalLineRole> = []
+        var semanticKindsInBlock: Set<SemanticKind> = []
+
+        func isLocalCommandMetaBlock(start: Int, end: Int) -> Bool {
+            guard start <= end else { return false }
+            for line in lines[start...end] where line.role == .meta {
+                let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("Local Command") {
+                    return true
+                }
+            }
+            return false
+        }
+
+	        func isUserInterruptMetaBlock(start: Int, end: Int) -> Bool {
+	            guard start <= end else { return false }
+	            for line in lines[start...end] where line.role == .meta {
+	                if TerminalBuilder.isUserInterruptMarker(line.text) {
+	                    return true
+	                }
+	            }
+	            return false
+	        }
+	
+	        func isTurnAbortedMetaBlock(start: Int, end: Int) -> Bool {
+	            guard start <= end else { return false }
+	            for line in lines[start...end] where line.role == .meta {
+	                let lower = line.text.lowercased()
+	                if lower.contains("tag: turn_aborted") { return true }
+	            }
+	            return false
+	        }
+
+        func semanticBlockKind(from kinds: Set<SemanticKind>) -> TerminalLayoutManager.BlockKind? {
+            if kinds.contains(.reviewSummary) { return .reviewSummary }
+            if kinds.contains(.plan) { return .plan }
+            if kinds.contains(.diff) { return .diff }
+            if kinds.contains(.code) { return .code }
+            return nil
+        }
+
+	        func finishBlock(endIdx: Int, blockIndex: Int?) {
+	            guard let s = startIdx else { return }
+            guard currentDecorationGroup != nil else { return }
+	            guard let startRange = ranges[lines[s].id] else { return }
+            guard let endRange = ranges[lines[endIdx].id] else { return }
+
+            let start = startRange.location
+            let end = endRange.location + endRange.length
+            guard end > start else { return }
+
+	            let isPreambleUserBlock = blockIndex.map { preambleUserBlockIndexes.contains($0) } ?? false
+	            let kind: TerminalLayoutManager.BlockKind? = {
+	                if rolesInBlock.count == 1, rolesInBlock.contains(.meta) {
+	                    if isUserInterruptMetaBlock(start: s, end: endIdx) { return .userInterrupt }
+	                    if isTurnAbortedMetaBlock(start: s, end: endIdx) { return .systemNotice }
+                    if let semanticKind = semanticBlockKind(from: semanticKindsInBlock) { return semanticKind }
+	                    return isLocalCommandMetaBlock(start: s, end: endIdx) ? .localCommand : nil
+	                }
+	                if rolesInBlock.contains(.error) { return .error }
+	                if rolesInBlock.contains(.toolInput) { return .toolCall }
+                if rolesInBlock.contains(.toolOutput) { return .toolOutput }
+                if rolesInBlock.contains(.user) { return isPreambleUserBlock ? .userPreamble : .user }
+                if let semanticKind = semanticBlockKind(from: semanticKindsInBlock) { return semanticKind }
+                return .agent
+            }()
+
+            if let kind {
+                out.append(.init(range: NSRange(location: start, length: end - start), kind: kind))
+            }
+        }
+
+        for (idx, line) in lines.enumerated() {
+            guard let blockIndex = line.blockIndex else {
+                // Treat nil block index lines as a standalone “agent” block for consistent spacing, but only if non-empty.
+                if startIdx != nil {
+                    finishBlock(endIdx: idx - 1, blockIndex: currentBlock)
+                    startIdx = nil
+                    currentBlock = nil
+                    currentDecorationGroup = nil
+                    rolesInBlock = []
+                    semanticKindsInBlock = []
+                }
+                if line.role != .meta, let r = ranges[line.id], r.length > 0 {
+                    let kind: TerminalLayoutManager.BlockKind = {
+                        if line.role == .user { return .user }
+                        if let semantic = line.semanticKind {
+                            switch semantic {
+                            case .plan: return .plan
+                            case .code: return .code
+                            case .diff: return .diff
+                            case .reviewSummary: return .reviewSummary
+                            }
+                        }
+                        return .agent
+                    }()
+                    out.append(.init(range: r, kind: kind))
+                }
+                continue
+            }
+
+            if currentDecorationGroup == nil {
+                currentBlock = blockIndex
+                currentDecorationGroup = line.decorationGroupID
+                startIdx = idx
+                rolesInBlock = [line.role]
+                semanticKindsInBlock = line.semanticKind.map { [$0] } ?? []
+                continue
+            }
+
+            if currentDecorationGroup != line.decorationGroupID {
+                finishBlock(endIdx: idx - 1, blockIndex: currentBlock)
+                currentBlock = blockIndex
+                currentDecorationGroup = line.decorationGroupID
+                startIdx = idx
+                rolesInBlock = [line.role]
+                semanticKindsInBlock = line.semanticKind.map { [$0] } ?? []
+                continue
+            }
+
+            rolesInBlock.insert(line.role)
+            if let semantic = line.semanticKind {
+                semanticKindsInBlock.insert(semantic)
+            }
+        }
+
+        if startIdx != nil {
+            finishBlock(endIdx: lines.count - 1, blockIndex: currentBlock)
+        }
+
+        if let highlightLineID = imageHighlightLineID, let range = ranges[highlightLineID] {
+            out.append(.init(range: range, kind: .imageAnchor))
+        }
+
+        return out.sorted {
+            if $0.range.location == $1.range.location && $0.range.length == $1.range.length {
+                if $0.kind == .imageAnchor { return false }
+                if $1.kind == .imageAnchor { return true }
+            }
+            return $0.range.location < $1.range.location
+        }
+    }
+
+    private func updateLayoutManagerUnifiedFind(_ lm: TerminalLayoutManager, query: String, occurrences: [MatchOccurrence], currentLineID: Int?) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, !occurrences.isEmpty else {
+            lm.matchLineIDs = []
+            lm.currentMatchLineID = nil
+            lm.matches = []
+            return
+        }
+
+        let matches = occurrences.map { occurrence in
+            TerminalLayoutManager.FindMatch(range: occurrence.range, isCurrentLine: occurrence.lineID == currentLineID)
+        }
+        lm.matchLineIDs = Set(occurrences.map(\.lineID))
+        lm.currentMatchLineID = currentLineID
+        lm.matches = matches.sorted { $0.range.location < $1.range.location }
+    }
+
+    private func updateLayoutManagerLocalFind(_ lm: TerminalLayoutManager, query: String, currentLineID: Int?, ranges: [Int: NSRange]) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, let currentLineID else {
+            lm.localFindRanges = []
+            lm.localFindCurrentLineID = nil
+            return
+        }
+        guard let base = ranges[currentLineID] else {
+            lm.localFindRanges = []
+            lm.localFindCurrentLineID = nil
+            return
+        }
+        guard let line = lines.first(where: { $0.id == currentLineID }) else {
+            lm.localFindRanges = []
+            lm.localFindCurrentLineID = nil
+            return
+        }
+
+        let renderedText: String = {
+            guard showCodeDiffLineNumbers,
+                  line.semanticKind == .code || line.semanticKind == .diff,
+                  let currentLineIndex = lines.firstIndex(where: { $0.id == currentLineID }) else {
+                return line.text
+            }
+
+            var semanticLineNumberCounters: [Int: Int] = [:]
+            semanticLineNumberCounters.reserveCapacity(32)
+            for idx in 0...currentLineIndex {
+                let lineAtIndex = lines[idx]
+                let previousDecorationGroupID = idx > 0 ? lines[idx - 1].decorationGroupID : nil
+                let isFirstLineOfBlock = previousDecorationGroupID != lineAtIndex.decorationGroupID
+                let rendered = renderedTranscriptLineText(lineAtIndex,
+                                                         showCodeDiffLineNumbers: showCodeDiffLineNumbers,
+                                                         isFirstLineOfBlock: isFirstLineOfBlock,
+                                                         semanticLineNumberCounters: &semanticLineNumberCounters)
+                if lineAtIndex.id == currentLineID {
+                    return rendered.text
+                }
+            }
+            return line.text
+        }()
+
+        let text = renderedText as NSString
+        var out: [NSRange] = []
+        out.reserveCapacity(4)
+        var search = NSRange(location: 0, length: text.length)
+        while search.length > 0 {
+            let found = text.range(of: q, options: [.caseInsensitive], range: search)
+            if found.location == NSNotFound { break }
+            out.append(NSRange(location: base.location + found.location, length: found.length))
+            let nextLoc = found.location + max(1, found.length)
+            if nextLoc >= text.length { break }
+            search = NSRange(location: nextLoc, length: text.length - nextLoc)
+        }
+        lm.localFindRanges = out
+        lm.localFindCurrentLineID = out.isEmpty ? nil : currentLineID
+    }
+
+    private func buildAttributedString(containerWidth: CGFloat) -> (NSAttributedString, [Int: NSRange]) {
+        buildAttributedString(containerWidth: containerWidth, renderedLines: lines, previousDecorationGroupID: nil)
+    }
+
+    private func buildAttributedString(containerWidth: CGFloat,
+                                       renderedLines: [TerminalLine],
+                                       previousDecorationGroupID: Int?,
+                                       initialSemanticLineNumberCounters: [Int: Int] = [:]) -> (NSAttributedString, [Int: NSRange]) {
+        let attr = NSMutableAttributedString()
+        var ranges: [Int: NSRange] = [:]
+        ranges.reserveCapacity(renderedLines.count)
+
+        let systemRegularFont = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        let systemSemiboldFont = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let monoRegularFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let monoSemiboldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
+
+        let userSwatch = TerminalRolePalette.appKit(role: .user, scheme: colorScheme, monochrome: monochrome)
+        let assistantSwatch = TerminalRolePalette.appKit(role: .assistant, scheme: colorScheme, monochrome: monochrome)
+        let toolInputSwatch = TerminalRolePalette.appKit(role: .toolInput, scheme: colorScheme, monochrome: monochrome)
+        let toolOutputSwatch = TerminalRolePalette.appKit(role: .toolOutput, scheme: colorScheme, monochrome: monochrome)
+        let errorSwatch = TerminalRolePalette.appKit(role: .error, scheme: colorScheme, monochrome: monochrome)
+        let metaSwatch = TerminalRolePalette.appKit(role: .meta, scheme: colorScheme, monochrome: monochrome)
+
+        func swatch(for role: TerminalLineRole) -> TerminalRolePalette.AppKitSwatch {
+            switch role {
+            case .user: return userSwatch
+            case .assistant: return assistantSwatch
+            case .toolInput: return toolInputSwatch
+            case .toolOutput: return toolOutputSwatch
+            case .error: return errorSwatch
+            case .meta: return metaSwatch
+            }
+        }
+
+        func semanticForegroundColor(for line: TerminalLine, fallback: NSColor) -> NSColor {
+            guard let semantic = line.semanticKind else { return fallback }
+            switch semantic {
+            case .plan:
+                return TranscriptColorSystem.semanticAccent(.plan)
+            case .code:
+                return TranscriptColorSystem.semanticAccent(.code)
+            case .reviewSummary:
+                return TranscriptColorSystem.semanticAccent(.reviewSummary)
+            case .diff:
+                let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("+"), !trimmed.hasPrefix("+++") {
+                    return TranscriptColorSystem.semanticAccent(.toolOutputSuccess)
+                }
+                if trimmed.hasPrefix("-"), !trimmed.hasPrefix("---") {
+                    return TranscriptColorSystem.semanticAccent(.error)
+                }
+                if trimmed.hasPrefix("@@") || trimmed.hasPrefix("diff --git") || trimmed.hasPrefix("--- ") || trimmed.hasPrefix("+++ ") {
+                    return TranscriptColorSystem.semanticAccent(.diff)
+                }
+                return fallback
+            }
+        }
+
+        let baseParagraph = NSMutableParagraphStyle()
+        baseParagraph.lineSpacing = 1.5
+        baseParagraph.paragraphSpacing = 0
+        baseParagraph.lineBreakMode = .byWordWrapping
+
+        let cardInsetX: CGFloat = 8
+        let leftPaddingFromCardEdge: CGFloat = 20 // Accent strip + 16px padding
+        let rightPaddingFromCardEdge: CGFloat = 16
+        let cardLeftIndent = cardInsetX + leftPaddingFromCardEdge
+        let cardRightInset = cardInsetX + rightPaddingFromCardEdge
+
+        func paragraph(spacingBefore: CGFloat) -> NSParagraphStyle {
+            let p = (baseParagraph.mutableCopy() as? NSMutableParagraphStyle) ?? baseParagraph
+            p.paragraphSpacingBefore = spacingBefore
+            p.firstLineHeadIndent = cardLeftIndent
+            p.headIndent = cardLeftIndent
+            p.tailIndent = -(cardRightInset)
+            return p
+        }
+
+        let paragraph0 = paragraph(spacingBefore: 0)
+        let paragraphGap = paragraph(spacingBefore: 18)
+        let paragraphMetaGap = paragraph(spacingBefore: 10)
+
+        let contentWidth = max(1, containerWidth - (cardLeftIndent + cardRightInset))
+        let thumbSpacing: CGFloat = 12
+        let thumbMaxColumns: Int = 5
+        let thumbMinWidthForColumnChoice: CGFloat = 140
+        let thumbColumns: Int = {
+            let raw = Int(floor((contentWidth + thumbSpacing) / (thumbMinWidthForColumnChoice + thumbSpacing)))
+            return min(thumbMaxColumns, max(1, raw))
+        }()
+        let rawThumbWidth: CGFloat = floor((contentWidth - (thumbSpacing * CGFloat(max(0, thumbColumns - 1)))) / CGFloat(thumbColumns))
+        let thumbSize: CGFloat = min(220, max(110, rawThumbWidth))
+
+        let thumbParagraph: NSParagraphStyle = {
+            let p = (baseParagraph.mutableCopy() as? NSMutableParagraphStyle) ?? baseParagraph
+            p.paragraphSpacingBefore = 8
+            p.firstLineHeadIndent = cardLeftIndent
+            p.headIndent = cardLeftIndent
+            p.tailIndent = -(cardRightInset)
+            p.tabStops = []
+            if thumbColumns > 1 {
+                p.defaultTabInterval = thumbSize + thumbSpacing
+                p.tabStops = (1..<thumbColumns).map { col in
+                    let tabLoc = cardLeftIndent + (CGFloat(col) * (thumbSize + thumbSpacing))
+                    return NSTextTab(textAlignment: .left, location: tabLoc)
+                }
+            }
+            return p
+        }()
+
+        func appendInlineThumbnails(_ images: [InlineSessionImage]) {
+            guard inlineImagesEnabled else { return }
+            guard !images.isEmpty else { return }
+
+            var idx = 0
+            while idx < images.count {
+                let rowStart = idx
+                let rowEnd = min(images.count, idx + thumbColumns)
+                let rowImages = Array(images[rowStart..<rowEnd])
+                idx = rowEnd
+
+                let row = NSMutableAttributedString()
+                let rowAttributes: [NSAttributedString.Key: Any] = [
+                    .font: systemRegularFont,
+                    .paragraphStyle: thumbParagraph
+                ]
+
+                for (col, image) in rowImages.enumerated() {
+                    if col > 0 {
+                        row.append(NSAttributedString(string: "\t", attributes: rowAttributes))
+                    }
+                    let attachment = InlineImageAttachment(imageID: image.id, fixedSize: NSSize(width: thumbSize, height: thumbSize))
+                    let frag = NSMutableAttributedString(attachment: attachment)
+                    frag.addAttribute(Coordinator.inlineImageIDKey, value: image.id, range: NSRange(location: 0, length: frag.length))
+                    row.append(frag)
+                }
+
+                row.append(NSAttributedString(string: "\n", attributes: rowAttributes))
+                row.addAttributes(rowAttributes, range: NSRange(location: 0, length: row.length))
+                attr.append(row)
+            }
+        }
+
+        var priorDecorationGroupID: Int? = previousDecorationGroupID
+        var semanticLineNumberCounters = initialSemanticLineNumberCounters
+        semanticLineNumberCounters.reserveCapacity(max(32, semanticLineNumberCounters.count))
+
+        for (idx, line) in renderedLines.enumerated() {
+            let blockIndex = line.blockIndex
+            let decorationGroupID = line.decorationGroupID
+            let isFirstLineOfBlock = priorDecorationGroupID != decorationGroupID
+            let isNewBlock = (idx > 0 || priorDecorationGroupID != nil) && priorDecorationGroupID != decorationGroupID
+            priorDecorationGroupID = decorationGroupID
+
+            let isLastLineOfBlock: Bool = {
+                if idx == renderedLines.count - 1 { return true }
+                return renderedLines[idx + 1].decorationGroupID != decorationGroupID
+            }()
+
+            let shouldAppendInlineImages: Bool = {
+                guard inlineImagesEnabled else { return false }
+                guard line.role == .user else { return false }
+                guard isLastLineOfBlock, let blockIndex else { return false }
+                return !(inlineImagesByUserBlockIndex[blockIndex]?.isEmpty ?? true)
+            }()
+
+            let paragraphStyle: NSParagraphStyle = {
+                guard isNewBlock else { return paragraph0 }
+                if line.role == .meta { return paragraphMetaGap }
+                return paragraphGap
+            }()
+
+            let isPreambleUserLine: Bool = {
+                guard line.role == .user else { return false }
+                guard let blockIndex else { return false }
+                return preambleUserBlockIndexes.contains(blockIndex)
+            }()
+
+            let lineSwatch = (isPreambleUserLine ? assistantSwatch : swatch(for: line.role))
+            let baseFont: NSFont = {
+                if line.semanticKind == .code || line.semanticKind == .diff {
+                    return monoRegularFont
+                }
+                if line.semanticKind == .plan {
+                    let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("#") || trimmed.hasPrefix("-") || trimmed.hasPrefix("*") {
+                        return systemSemiboldFont
+                    }
+                }
+                if line.semanticKind == .reviewSummary {
+                    return isFirstLineOfBlock ? systemSemiboldFont : systemRegularFont
+                }
+                if line.role == .toolInput {
+                    return isFirstLineOfBlock ? monoSemiboldFont : monoRegularFont
+                }
+                if line.role == .toolOutput || line.role == .error {
+                    return monoRegularFont
+                }
+                return systemRegularFont
+            }()
+
+            let lineTextWithPrefix: (text: String, linkOffset: Int) = {
+                renderedTranscriptLineText(line,
+                                           showCodeDiffLineNumbers: showCodeDiffLineNumbers,
+                                           isFirstLineOfBlock: isFirstLineOfBlock,
+                                           semanticLineNumberCounters: &semanticLineNumberCounters)
+            }()
+
+            let needsTrailingNewline = (idx != renderedLines.count - 1) || shouldAppendInlineImages
+            let lineString = lineTextWithPrefix.text + (needsTrailingNewline ? "\n" : "")
+
+            let start = attr.length
+            let foregroundColor = semanticForegroundColor(for: line, fallback: lineSwatch.foreground)
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: baseFont,
+                .foregroundColor: foregroundColor,
+                .paragraphStyle: paragraphStyle
+            ]
+            attr.append(NSAttributedString(string: lineString, attributes: attributes))
+
+            if linkificationEnabled {
+                let localMatches = TranscriptLinkifier.matches(in: line.text)
+                for match in localMatches {
+                    guard let resolved = TranscriptLinkifier.resolve(path: match.path,
+                                                                     sessionCwd: sessionCwd,
+                                                                     repoRoot: repoRootPath) else { continue }
+                    let payload = TranscriptLinkifier.linkPayload(path: resolved, line: match.line, column: match.column)
+                    let absoluteRange = NSRange(location: start + lineTextWithPrefix.linkOffset + match.range.location,
+                                                length: match.range.length)
+                    attr.addAttributes([
+                        .link: payload,
+                        .underlineStyle: NSUnderlineStyle.single.rawValue
+                    ], range: absoluteRange)
+                }
+            }
+
+            if shouldAppendInlineImages, let blockIndex, let images = inlineImagesByUserBlockIndex[blockIndex] {
+                appendInlineThumbnails(images)
+            }
+
+            ranges[line.id] = NSRange(location: start, length: attr.length - start)
+        }
+
+        return (attr, ranges)
+    }
+
+}
