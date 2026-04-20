@@ -2179,6 +2179,8 @@
 "Original Website:" = "原项目网站：";
 "Original GitHub:" = "原项目 GitHub：";
 "Original Author:" = "原作者：";
+"Maintainer:" = "维护者：";
+"Current GitHub:" = "当前仓库：";
 "Delete Session File…" = "删除会话文件…";
 "Delete Session File?" = "删除会话文件？";
 "Delete Session File" = "删除会话文件";

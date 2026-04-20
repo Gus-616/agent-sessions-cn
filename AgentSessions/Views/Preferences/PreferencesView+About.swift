@@ -38,6 +38,18 @@ extension PreferencesView {
                     }
                 }
 
+                labeledRow("Maintainer:") {
+                    Text("Gus616")
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                labeledRow("Current GitHub:") {
+                    Button("github.com/Gus-616/agent-sessions-cn") {
+                        openAboutURL("https://github.com/Gus-616/agent-sessions-cn")
+                    }
+                    .buttonStyle(.link)
+                }
+
                 labeledRow("Security & Privacy:") {
                     Button("Security & Privacy") {
                         openAboutURL("https://github.com/jazzyalex/agent-sessions/blob/main/docs/security.md")

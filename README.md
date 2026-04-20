@@ -1,6 +1,6 @@
-# Agent Sessions (macOS)
+# Agent Sessions CN（macOS）
 
-[![Build](https://github.com/jazzyalex/agent-sessions/actions/workflows/ci.yml/badge.svg)](https://github.com/jazzyalex/agent-sessions/actions/workflows/ci.yml)
+[![Build](https://github.com/Gus-616/agent-sessions-cn/actions/workflows/ci.yml/badge.svg)](https://github.com/Gus-616/agent-sessions-cn/actions/workflows/ci.yml)
 
 <table>
 <tr>
@@ -9,155 +9,162 @@
 </td>
 <td>
 
-**Unified session browser for Codex CLI, Claude Code, Cursor, Gemini CLI, GitHub Copilot CLI, OpenCode, and OpenClaw.**
-Droid histories remain importable for legacy sessions, but Droid is no longer an actively supported provider.
-Search, browse, and resume your past AI-coding sessions in a local-first macOS app.
+**Agent Sessions 中文汉化独立版。**  
+这是一个本地优先的 macOS AI 编码会话浏览器，统一管理 Codex CLI、Claude Code、Cursor、Gemini CLI、GitHub Copilot CLI、OpenCode、OpenClaw 等会话记录。
+
+当前版本基于原作者 [jazzyalex/agent-sessions](https://github.com/jazzyalex/agent-sessions) 二次开发与中文本地化，汉化与维护：**Gus616**。
 
 </td>
 </tr>
 </table>
 
-- Requires: macOS 14+
-- License: MIT
-- Security & Privacy: Local-only. No telemetry. Details: `docs/PRIVACY.md` and `docs/security.md`
+- 系统要求：macOS 14+
+- 协议：MIT
+- 隐私策略：本地优先、无遥测、不上传会话内容
 
 <p align="center">
-  <a href="https://github.com/jazzyalex/agent-sessions/releases/download/v3.6.2/AgentSessions-3.6.2.dmg"><b>Download Agent Sessions 3.6.2 (DMG)</b></a>
+  <a href="https://github.com/Gus-616/agent-sessions-cn/releases/download/v3.6.2-zh.1/AgentSessions-ZH-3.6.2.dmg"><b>下载 Agent Sessions CN v3.6.2-zh.1（DMG）</b></a>
   •
-  <a href="https://github.com/jazzyalex/agent-sessions/releases">All Releases</a>
+  <a href="https://github.com/Gus-616/agent-sessions-cn/releases">所有版本</a>
   •
-  <a href="#install">Install</a>
+  <a href="#安装">安装</a>
   •
-  <a href="#resume-workflows">Resume Workflows</a>
+  <a href="#核心功能">核心功能</a>
   •
-  <a href="#development">Development</a>
+  <a href="#开发">开发</a>
 </p>
 
-## Overview
+## 项目说明
 
-Agent Sessions helps you search across large session histories, quickly find the right prompt/tool output, then reuse it by copying snippets or resuming supported sessions in your terminal.
+这个仓库用于维护 **Agent Sessions 的中文汉化独立版**，目标是：
 
-<div align="center">
-  <p style="margin:0 0 0px 0;"><em>Transcript view with search (Dark Mode)</em></p>
-  <img src="docs/assets/screenshot-H.png" alt="Transcript view with search (Dark Mode)" width="100%" style="max-width:960px;border-radius:8px;margin:5px 0;"/>
+- 提供完整中文界面，而不是零散翻译
+- 保持和原项目功能基本一致
+- 移除应用自身在线更新，避免覆盖汉化版
+- 保留本地优先、只读索引、统一会话检索这些核心能力
 
-  <p style="margin:0 0 0px 0;"><em>Resume Codex CLI, Claude Code, and OpenCode sessions</em></p>
-  <img src="docs/assets/screenshot-V.png" alt="Resume Codex CLI, Claude Code, and OpenCode sessions" width="100%" style="max-width:960px;border-radius:8px;margin:5px;"/>
-</div>
+当前发布版本：`v3.6.2-zh.1`
 
-## What's New in 3.6
+## 当前版本状态
 
-**TL;DR** — Cursor IDE/CLI joins the active provider lineup, Droid session import is now legacy-only, and automatic new-provider detection keeps the browser current.
+这一版已经包含：
 
-**Highlights:** Browse, search, and resume your Cursor AI sessions alongside every other agent. Agent Sessions now reads Cursor's JSONL transcripts and SQLite chat databases from `~/.cursor/`, with full support for subagent hierarchy. A new discoverability banner appears when a newly supported agent is found on disk, and the update tour auto-generates a slide so you never miss a new provider.
+- 全应用中文本地化
+- 图片浏览器、设置页、主窗口、菜单、提示文案等中文化
+- 移除应用自身 `Check for Updates` / Sparkle 更新链路
+- 会话列表右键支持删除原始 `JSONL`，并同时删除本地保存副本
+- About 页补充原项目来源与汉化维护信息
 
-## Core Features
+当前未包含：
 
-- Agent Cockpit live HUD for active Codex CLI, Claude Code, and OpenCode iTerm2 sessions.
-- Unified browsing across supported agents, with strict filtering and a single session list.
-- Unified Search and image browsing across sessions, plus in-session Find for fast transcript navigation.
-- Readable tool calls/outputs and navigation between prompts, tools, and errors.
-- Right-click Copy Resume Command for Claude, Codex, OpenCode, Copilot, and Gemini sessions.
-- Local-only indexing designed for large histories.
+- Homebrew 安装
+- 应用内自动更新
+- Developer ID 正式签名与 Apple 公证
 
-## Agent Cockpit (Beta)
+## 核心功能
 
-Agent Cockpit is the live command center for active iTerm2 Codex CLI, Claude Code, and OpenCode sessions, with shared active/waiting summaries and live Claude usage tracking.
+- 统一浏览多个 AI 编码代理的历史会话
+- 跨会话全文搜索、项目筛选、模型筛选
+- 会话转录查看、代码块浏览、图片浏览
+- 支持复制恢复命令，快速回到历史会话
+- Agent Cockpit / 用量跟踪 / 统一窗口等原项目能力
+- 本地索引、无云端上传、会话内容不出机器
 
-<div align="center">
-  <p style="margin:0 0 0px 0;"><em>Agent Cockpit</em></p>
-  <img src="docs/assets/screenshot-cockpit-light.png" alt="Agent Cockpit in light mode" width="100%" style="max-width:820px;border-radius:8px;margin:5px 0;"/>
-</div>
+## 支持的会话来源
 
-## Agent Cockpit Setup
+- Codex CLI
+- Claude Code
+- Cursor
+- Gemini CLI
+- GitHub Copilot CLI
+- OpenCode
+- OpenClaw
+- Droid（遗留导入）
 
-### Prerequisites
+## 安装
 
-- Agent Sessions with Live Sessions enabled
-- iTerm2
-- Agents running in iTerm2
+### 方式一：下载 DMG
 
-### Ideal Setup
+1. 下载 [AgentSessions-ZH-3.6.2.dmg](https://github.com/Gus-616/agent-sessions-cn/releases/download/v3.6.2-zh.1/AgentSessions-ZH-3.6.2.dmg)
+2. 将 **Agent Sessions.app** 拖入“应用程序”
 
-- Set the iTerm window title to the repo name
-- Run that repo's agents in that window
-- Give each tab/session its own clear name
-- Use the same name for the tab, session, and badge
+### 首次打开说明
 
-### Layout
+当前公开发布的 `DMG` **未做 Developer ID 公证**。  
+因此在部分 macOS 环境下，首次打开时可能看到安全提示。
 
-- One repo per desktop/Space if possible
-- Or keep several on one desktop if you prefer
-- Keep Agent Cockpit pinned in a corner so you can always see activity
-- Click from the cockpit to jump straight to a session
+如果系统拦截，可按下面方式放行：
 
-## Install
+1. 先尝试打开一次应用
+2. 打开 `系统设置 -> 隐私与安全性`
+3. 在安全提示区域点击 **仍要打开 / Open Anyway**
 
-### Option A — Download DMG
-1. [Download AgentSessions-3.6.2.dmg](https://github.com/jazzyalex/agent-sessions/releases/download/v3.6.2/AgentSessions-3.6.2.dmg)
-2. Drag **Agent Sessions.app** into Applications.
+这不影响应用本身功能。
 
-### Option B — Homebrew
-```bash
-brew tap jazzyalex/agent-sessions
-brew install --cask agent-sessions
-```
+## 隐私与安全
 
-### Automatic Updates (Sparkle)
+- 本地优先，无遥测
+- 默认不上传任何会话内容
+- 主要读取本地会话目录与索引数据
+- 当前版本额外支持在应用内删除原始 `JSONL` 会话文件，因此这是一个**带本地文件管理能力**的版本，不再是完全只读壳层
 
-Agent Sessions uses Sparkle for automatic updates (signed + notarized).
+更多说明见：
 
-To force an update check (for testing):
-```bash
-defaults delete com.triada.AgentSessions SULastCheckTime
-open "/Applications/Agent Sessions.app"
-```
+- [docs/PRIVACY.md](docs/PRIVACY.md)
+- [docs/security.md](docs/security.md)
 
-## Documentation
+## 与原项目的关系
 
-- Release notes: `docs/CHANGELOG.md`
-- Monthly summaries: `docs/summaries/`
-- Privacy: `docs/PRIVACY.md`
-- Security: `docs/security.md`
-- Maintainers: `docs/deployment.md`
+本仓库不是原作者官方仓库，也不是原版自动更新分支。  
+它是基于原项目源码制作的中文汉化独立版本。
 
-## Resume Workflows
+原项目地址：
 
-- Right-click any Claude, Codex, Cursor, OpenCode, Copilot, or Gemini session and choose **Copy Resume Command** to get the exact CLI command for that session.
-- Open a session in your preferred terminal (Terminal.app or iTerm).
-- Use Unified Search (across sessions) and Find (within a session) to jump to relevant tool calls and outputs quickly.
+- GitHub：[jazzyalex/agent-sessions](https://github.com/jazzyalex/agent-sessions)
+- 原作者：jazzyalex
 
-## Privacy & Security
+## 文档
 
-- Local-only. No telemetry.
-- Reads agent session directories in read-only mode:
-  - `~/.codex/sessions`
-  - `~/.claude/sessions`
-  - `~/.gemini/tmp`
-  - `~/.copilot/session-state`
-  - `~/.cursor/projects` and `~/.cursor/chats`
-  - `~/.factory/sessions` and `~/.factory/projects`
-  - `~/.local/share/opencode/opencode.db` and `~/.local/share/opencode/storage/session`
-- Details: `docs/PRIVACY.md` and `docs/security.md`
+- 更新记录：`docs/CHANGELOG.md`
+- 隐私：`docs/PRIVACY.md`
+- 安全：`docs/security.md`
+- 维护与发布备注：`docs/deployment.md`
 
-## Development
+## 开发
 
-Prerequisites:
-- Xcode (macOS 14+)
+前置要求：
 
-Build:
+- Xcode（macOS 14+）
+
+构建 Debug：
+
 ```bash
 xcodebuild -project AgentSessions.xcodeproj -scheme AgentSessions -configuration Debug -destination 'platform=macOS' build
 ```
 
-Tests:
+构建 Release：
+
+```bash
+xcodebuild -project AgentSessions.xcodeproj -scheme AgentSessions -configuration Release -destination 'platform=macOS' build
+```
+
+运行测试：
+
 ```bash
 xcodebuild -project AgentSessions.xcodeproj -scheme AgentSessionsTests -destination 'platform=macOS' test
 ```
 
-Contributing:
-- `CONTRIBUTING.md`
+## 发布说明
+
+当前 GitHub Release：
+
+- [Agent Sessions CN v3.6.2-zh.1](https://github.com/Gus-616/agent-sessions-cn/releases/tag/v3.6.2-zh.1)
+
+对应资产：
+
+- `AgentSessions-ZH-3.6.2.dmg`
+- `AgentSessions-ZH-3.6.2.dmg.sha256`
 
 ## License
 
-MIT. See `LICENSE`.
+MIT。详见 [LICENSE](LICENSE)。
